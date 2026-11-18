@@ -1,5 +1,5 @@
 // Bump this number whenever you change any cached file, so phones fetch the update.
-const CACHE = 'hex-settlers-v3';
+const CACHE = 'hex-settlers-v4';
 const FILES = [
   './',
   './index.html',
@@ -8,15 +8,28 @@ const FILES = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './ui/styles.css',
-  './ui/main.js',
-  './ui/board-view.js',
-  './ui/pan-zoom.js',
-  './ui/geometry.js',
   './ui/art.js',
-  './engine/rng.js',
-  './engine/hex.js',
-  './engine/constants.js',
+  './ui/board-view.js',
+  './ui/game-screen.js',
+  './ui/geometry.js',
+  './ui/main.js',
+  './ui/menu.js',
+  './ui/pan-zoom.js',
+  './ui/pieces-view.js',
+  './ui/storage.js',
+  './engine/bandit.js',
   './engine/board.js',
+  './engine/cards.js',
+  './engine/constants.js',
+  './engine/game.js',
+  './engine/helpers.js',
+  './engine/hex.js',
+  './engine/rng.js',
+  './engine/scoring.js',
+  './engine/topology.js',
+  './engine/trade.js',
+  './engine/turn.js',
+  './bots/bot.js',
 ];
 
 self.addEventListener('install', (event) => {

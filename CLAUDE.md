@@ -6,6 +6,7 @@ An offline-first hex-board strategy game (resource trading and building, in the 
 - Vanilla HTML/CSS/JS with ES modules. No frameworks, no build tools, no new dependencies without asking first.
 - All paths are RELATIVE (the site is served from /hex-settlers/ on GitHub Pages). Never use paths starting with "/".
 - Do not use the trademarked game's name, logo, card art or official terminology in the UI or code. Use our own names and our own simple artwork.
+- Our names: resources Wood, Clay, Sheep, Wheat, Ore (chosen by the user); "Bandit"; "Bonus cards" (Soldier, Victory Point, Road Crew, Harvest, Monopoly); "Longest Route" and "Strongest Army" bonuses.
 - Never commit secrets. Do not read or write .env files.
 
 ## Architecture (most important rule)
@@ -15,7 +16,9 @@ An offline-first hex-board strategy game (resource trading and building, in the 
   - `legalActions(state)` lists every action the current player may take.
   - Randomness goes through a seeded random-number generator passed in via the state, so games are reproducible and testable.
 - `ui/` renders state (SVG for the board) and sends actions to the engine. It contains no game rules.
-- `bots/` pick one action from `legalActions(state)`. Bots never bypass the engine.
+- `bots/` pick one action from `legalActions(state)` (or a free-form discard/trade offer the engine then checks). Bots never bypass the engine. `timeoutAction` is what the turn timer does for a human whose time runs out.
+- Engine modules: `game.js` (front door: createGame, applyAction, legalActions, waitingFor), `turn.js` (setup, dice, building), `bandit.js`, `trade.js`, `cards.js`, `scoring.js`, `topology.js`, `board.js`.
+- UI modules: `main.js` (start), `menu.js`, `game-screen.js` (screen state, bots loop, timer), `board-view.js` + `pieces-view.js` (SVG), `pan-zoom.js`, `art.js`, `storage.js` (save/continue).
 - Pass-and-play and bot games use the exact same engine.
 
 ## Offline / PWA
@@ -23,7 +26,8 @@ An offline-first hex-board strategy game (resource trading and building, in the 
 - When ANY cached file changes, bump the CACHE version string in sw.js (e.g. hex-settlers-v2), or phones keep the old version.
 
 ## Testing
-- Rules tests live in `tests/` and run with: `node --test`
+- Rules tests live in `tests/` and run with: `node --test` (includes full bot-only games).
+- In the browser, add `?fast` to the address to make bots move almost instantly. The service worker is skipped on localhost.
 - Add tests for every new rule before or with the code. Do not change a test to make it pass without explaining why.
 
 ## Working style
@@ -33,11 +37,11 @@ An offline-first hex-board strategy game (resource trading and building, in the 
 
 ## Milestones
 0. Installable offline shell (DONE)
-1. Board: random hex board, numbers, ports, pinch/scroll on phone
-2. Setup + turn loop: starting pieces, dice, resources, build roads/settlements/cities with legal-move checks
-3. Robber: a 7 forces discards, robber moves, stealing
-4. Trading: bank and port trades, then player-to-player
-5. Development cards, longest road, largest army, win at 10 points
-6. Pass-and-play: "hand the phone to Player 2" screen hides cards between turns
-7. Bots: random legal moves first, then a scored heuristic
-8. Polish: save/resume, undo, sounds, own artwork
+1. Board: random hex board, numbers, ports, pinch/scroll on phone (DONE)
+2. Setup + turn loop: starting pieces, dice, resources, build roads/settlements/cities with legal-move checks (DONE)
+3. Bandit: a 7 forces discards, bandit moves, stealing (DONE)
+4. Trading: bank and port trades, then player-to-player (DONE)
+5. Bonus cards, Longest Route, Strongest Army, win at 10 points (DONE)
+6. Pass-and-play: "pass the phone" cover hides cards between players (DONE)
+7. Bots: goal-based heuristic with colonist-style trading; menu with up to 4 seats; turn timer (DONE)
+8. Polish: undo, sounds, smarter bots, trade counter-offers, animations (save/continue is done)
