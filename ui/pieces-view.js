@@ -49,14 +49,6 @@ export function renderPieces(svg, state, { targets = [], hot = null } = {}) {
     layer.append(el('polygon', { points: shape(b.type, x, y), fill: PLAYER_COLOURS[b.player], class: 'building' }));
   }
 
-  const c = hexCentre(state.bandit);
-  const bandit = el('g', { class: 'bandit', transform: `translate(${c.x - 25} ${c.y + 8})` });
-  bandit.append(
-    el('ellipse', { cx: 0, cy: 4, rx: 7, ry: 10 }),
-    el('circle', { cx: 0, cy: -9, r: 5.5 }),
-  );
-  layer.append(bandit);
-
   targets.forEach((t, i) => {
     const g = el('g', { class: 'target', 'data-target': i });
     if (t.corner) {
@@ -74,4 +66,30 @@ export function renderPieces(svg, state, { targets = [], hot = null } = {}) {
     }
     layer.append(g);
   });
+
+  // The bandit is kept between redraws so it can glide to its new hex.
+  let bandit = svg.querySelector('#bandit-piece');
+  if (!bandit) {
+    bandit = el('g', { id: 'bandit-piece', class: 'bandit' });
+    bandit.append(el('ellipse', { cx: 0, cy: 4, rx: 7, ry: 10 }), el('circle', { cx: 0, cy: -9, r: 5.5 }));
+  }
+  svg.append(bandit);
+  const c = hexCentre(state.bandit);
+  bandit.style.transform = `translate(${c.x - 25}px, ${c.y + 8}px)`;
+}
+
+// A ring that spreads out from a hex (bandit landing, soldier played).
+export function ripple(svg, hexId, cls = 'ripple') {
+  const c = hexCentre(hexId);
+  const ring = el('circle', { cx: c.x, cy: c.y, r: 46, class: cls });
+  svg.append(ring);
+  setTimeout(() => ring.remove(), 1400);
+}
+
+// Board (SVG) coordinates -> screen pixels.
+export function toScreen(svg, x, y) {
+  const pt = svg.createSVGPoint();
+  pt.x = x; pt.y = y;
+  const p = pt.matrixTransform(svg.getScreenCTM());
+  return { x: p.x, y: p.y };
 }

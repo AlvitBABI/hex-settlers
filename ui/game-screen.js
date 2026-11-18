@@ -1,24 +1,26 @@
 // The game screen: shows the state, turns taps into engine actions,
-// runs the bots and the turn timer. No game rules live here: everything
-// goes through applyAction / legalActions.
+// runs the bots, the turn timer, animations and sounds. No game rules
+// live here: everything goes through applyAction / legalActions.
 import { applyAction, legalActions, waitingFor } from '../engine/game.js';
-import { points } from '../engine/scoring.js';
-import { tradeRatio } from '../engine/trade.js';
+import { points, longestRoadFor } from '../engine/scoring.js';
+import { tradeRatio, bankTradeError, dealWith } from '../engine/trade.js';
 import { CARD_NAMES } from '../engine/cards.js';
-import { COSTS, RESOURCES } from '../engine/constants.js';
+import { COSTS, RESOURCES, DISCARD_LIMIT } from '../engine/constants.js';
+import { HEX_CORNERS } from '../engine/topology.js';
 import { handSize, hasCards } from '../engine/helpers.js';
 import { chooseAction, timeoutAction } from '../bots/bot.js';
 import { renderBoard } from './board-view.js';
-import { renderPieces } from './pieces-view.js';
+import { renderPieces, ripple, toScreen } from './pieces-view.js';
+import { hexCentre } from './geometry.js';
 import { enablePanZoom } from './pan-zoom.js';
 import { NAMES, RESOURCE_COLOUR, PLAYER_COLOURS } from './art.js';
 import { saveGame, clearSave } from './storage.js';
+import { sfx, soundOn, toggleSound } from './sound.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Add ?fast to the address to make bots move almost instantly (for testing).
 const SPEED = new URLSearchParams(location.search).has('fast') ? 0.03 : 1;
-const DICE = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 const CARD_HELP = {
   soldier: 'Move the bandit and steal a card.',
   point: '+1 victory point, kept secret.',
@@ -26,6 +28,8 @@ const CARD_HELP = {
   harvest: 'Take any 2 resources from the bank.',
   monopoly: 'Take all of one resource from every player.',
 };
+// Moves that can be taken back (they reveal nothing random).
+const UNDOABLE = new Set(['placeSettlement', 'buildRoad', 'buildSettlement', 'buildCity', 'bankTrade']);
 
 // ---- Screen state (not game rules) ----
 let S = null;          // game state
@@ -34,27 +38,29 @@ let onExit = () => {};
 let viewer = 0;        // the human whose cards are on screen
 let cover = null;      // { type: 'pass', player } | null
 let mode = null;       // 'road' | 'settlement' | 'city' while choosing a spot
-let userSheet = null;  // 'trade' | 'cards' when opened by a button
-let draft = null;      // trade offer being built
-let bankPick = null;   // { give, get }
+let userSheet = null;  // 'trade' | 'cards' | 'leave' when opened by a button
+let draft = null;      // trade being built: { give: {}, get: {} }
+let backToTrade = false; // reopen the trade panel when an offer closes
 let discardPick = {};
-let harvestPick = null; // [] while picking Harvest resources
+let harvestPick = null; // [] while picking Harvest, 'monopoly' while picking Monopoly
 let targets = [];
+let undoStack = [];
 let autoTimer = null;
-let deadline = null, deadlineKey = null, expiredKey = null, lastTick = Date.now();
+let deadline = null, deadlineKey = null, expiredKey = null, lastTick = Date.now(), lastBeep = null;
 let panZoom = null;
-let toastTimer = null;
 
 const isHuman = (p) => S.players[p].kind === 'human';
 const humanCount = () => S.players.filter((p) => p.kind === 'human').length;
-const resetDraft = () => { draft = { give: {}, get: {} }; bankPick = { give: null, get: null }; };
+const clean = (b) => Object.fromEntries(Object.entries(b).filter(([, n]) => n > 0));
+const total = (b) => Object.values(b).reduce((a, n) => a + n, 0);
+const resetDraft = () => { draft = { give: {}, get: {} }; };
 
 export function startGame({ config: cfg, state, onExit: exit }) {
   config = cfg;
   S = state;
   onExit = exit;
   viewer = S.players.find((p) => p.kind === 'human').id;
-  mode = null; userSheet = null; harvestPick = null; discardPick = {};
+  mode = null; userSheet = null; harvestPick = null; discardPick = {}; undoStack = []; backToTrade = false;
   deadline = null; deadlineKey = null; expiredKey = null;
   resetDraft();
   updateViewer();
@@ -64,7 +70,8 @@ export function startGame({ config: cfg, state, onExit: exit }) {
   const bounds = renderBoard(svg, S.board);
   if (panZoom) panZoom.setBounds(bounds);
   else panZoom = enablePanZoom(svg, bounds, { onTap });
-  changed({ save: false });
+  $('sound').textContent = soundOn() ? '🔊' : '🔇';
+  changed(null, { save: false });
 }
 
 export function stopGame() {
@@ -75,14 +82,25 @@ export function stopGame() {
 // ---- Applying actions ----
 
 function dispatch(action) {
+  const before = S;
   const res = applyAction(S, action);
   if (!res.ok) { toast(res.error); return false; }
+  if (UNDOABLE.has(action.type) && isHuman(action.player)) undoStack.push(before);
+  else undoStack = [];
   S = res.state;
-  changed();
+  changed(before);
   return true;
 }
 
-function changed({ save = true } = {}) {
+function undo() {
+  if (!undoStack.length) return;
+  const prev = S;
+  S = undoStack.pop();
+  mode = null;
+  changed(prev, { quiet: true });
+}
+
+function changed(prev, { save = true, quiet = false } = {}) {
   if (save) saveGame({ config, state: S });
   if (S.phase === 'over') clearSave();
   const myTurn = S.phase === 'play' && S.current === viewer && !S.pending && !S.trade;
@@ -90,10 +108,15 @@ function changed({ save = true } = {}) {
   if (S.pending?.type !== 'discard') discardPick = {};
   if (userSheet === 'trade' && (S.trade || S.pending)) userSheet = null;
   if (userSheet === 'cards' && S.pending) userSheet = null;
+  if (backToTrade && !S.trade) {
+    backToTrade = false;
+    if (myTurn) { userSheet = 'trade'; resetDraft(); }
+  }
   updateViewer();
   updateDeadline();
   render();
-  scheduleAuto();
+  if (prev && !quiet) showEvents(prev, S);
+  scheduleAuto(prev);
 }
 
 // Pick whose cards are shown. With several humans, hand-overs get a cover.
@@ -106,20 +129,22 @@ function updateViewer() {
   if (next !== viewer) {
     if (humanCount() > 1) cover = { type: 'pass', player: next };
     viewer = next;
-    mode = null; userSheet = null; harvestPick = null;
+    mode = null; userSheet = null; harvestPick = null; undoStack = [];
   }
 }
 
-// ---- Bots and timeouts ----
+// ---- Bots, automatic declines and timeouts ----
 
 function nextAuto() {
   if (!S || S.phase === 'over') return null;
-  const timedOut = expiredKey !== null && expiredKey === deadlineKey;
+  const t = S.trade;
   for (const p of waitingFor(S)) {
     if (!isHuman(p)) {
       const a = chooseAction(S, p);
       if (a) return a;
-    } else if (timedOut) {
+    } else if (t && t.from !== p && t.responses[p] === null && !hasCards(S.players[p].hand, t.get)) {
+      return { type: 'respondTrade', player: p, accept: false }; // can't accept anyway: no need to ask
+    } else if (timedOut()) {
       const a = timeoutAction(S, p);
       if (a) return a;
     }
@@ -127,17 +152,24 @@ function nextAuto() {
   return null;
 }
 
-function scheduleAuto() {
+const timedOut = () => expiredKey !== null && expiredKey === deadlineKey;
+
+function scheduleAuto(prev) {
   clearTimeout(autoTimer);
   const next = nextAuto();
   if (!next) return;
-  const delay = isHuman(next.player) ? 150
+  // Give people time to see what just happened before the next bot move.
+  const justRolled = prev && S.turn.rolled && S.turn.dice && prev.turn.dice !== S.turn.dice;
+  const banditMoved = prev && prev.bandit !== S.bandit;
+  let delay = isHuman(next.player) ? (next.type === 'respondTrade' ? 300 : 150)
     : S.phase === 'setup' ? 500
-      : next.type === 'respondTrade' ? 600 : 850;
-  const wait = delay * SPEED;
+      : next.type === 'respondTrade' ? 350 : 850;
+  if (justRolled) delay = Math.max(delay, 1700);
+  if (banditMoved) delay = Math.max(delay, 1200);
   autoTimer = setTimeout(() => {
     const a = nextAuto();
     if (!a) return;
+    const before = S;
     let res = applyAction(S, a);
     if (!res.ok) {
       console.warn('Automatic move refused:', a, res.error);
@@ -145,9 +177,14 @@ function scheduleAuto() {
       res = fallback ? applyAction(S, fallback) : res;
       if (!res.ok) return;
     }
+    undoStack = [];
     S = res.state;
-    changed();
-  }, wait);
+    if (a.type === 'respondTrade' && isHuman(a.player) && !a.accept && !timedOut() && before.trade) {
+      const t = before.trade;
+      note(`${S.players[t.from].name} wanted ${describe(t.get)}: you don't have it`);
+    }
+    changed(before);
+  }, delay * SPEED);
 }
 
 // ---- Turn timer (colonist-style: when it runs out, the game plays for you) ----
@@ -156,7 +193,11 @@ function timerKey() {
   if (!config.turnTime || S.phase === 'over') return null;
   const humans = waitingFor(S).filter(isHuman);
   if (!humans.length) return null;
-  if (S.trade && !isHuman(S.trade.from)) return `offer-${S.turn.number}-${S.turn.offers}`;
+  const t = S.trade;
+  if (t && !isHuman(t.from)) {
+    const canAnswer = humans.some((p) => t.responses[p] === null && hasCards(S.players[p].hand, t.get));
+    return canAnswer ? `offer-${S.turn.number}-${S.turn.offers}` : null;
+  }
   if (S.pending?.type === 'discard') return `discard-${S.turn.number}`;
   if (humans.includes(S.current)) return S.phase === 'setup' ? `setup-${S.setup.index}` : `turn-${S.turn.number}`;
   return null;
@@ -176,18 +217,28 @@ function updateDeadline() {
   deadline = key ? Date.now() + secondsFor(key) * 1000 : null;
 }
 
+// The clock stops while the phone is being passed, and while your own
+// offer is waiting for answers (so trying trades doesn't eat your turn).
+function timerPaused() {
+  if (cover) return true;
+  const t = S.trade;
+  return !!(t && t.from === viewer && Object.values(t.responses).some((r) => r === null));
+}
+
 function tick() {
   const now = Date.now();
-  if (deadline && cover) deadline += now - lastTick; // paused while the phone is passed
+  if (S && deadline && timerPaused()) deadline += now - lastTick;
   lastTick = now;
   const el = $('timer');
   if (!S || !deadline) { el.textContent = ''; return; }
   const left = Math.max(0, Math.ceil((deadline - now) / 1000));
   el.textContent = `${left}s`;
   el.classList.toggle('low', left <= 10);
+  el.classList.toggle('paused', timerPaused());
+  if (left <= 5 && left > 0 && lastBeep !== left && !timerPaused()) { lastBeep = left; sfx.tick(); }
   if (left === 0 && expiredKey !== deadlineKey) {
     expiredKey = deadlineKey;
-    mode = null; userSheet = null; harvestPick = null;
+    mode = null; userSheet = null; harvestPick = null; backToTrade = false;
     toast('Time is up! Playing for you…');
     render();
     scheduleAuto();
@@ -205,6 +256,9 @@ function onTap(target) {
   if (action) { mode = null; dispatch(action); }
 }
 
+const canTradeNow = () => S.phase === 'play' && S.current === viewer && !S.pending && !S.trade &&
+  S.turn.rolled && !S.turn.freeRoads && !cover;
+
 const ACTIONS = {
   roll: () => dispatch({ type: 'roll', player: viewer }),
   end: () => dispatch({ type: 'endTurn', player: viewer }),
@@ -212,19 +266,42 @@ const ACTIONS = {
   settlement: () => { mode = mode === 'settlement' ? null : 'settlement'; render(); },
   city: () => { mode = mode === 'city' ? null : 'city'; render(); },
   buy: () => dispatch({ type: 'buyCard', player: viewer }),
-  trade: () => { userSheet = 'trade'; mode = null; resetDraft(); render(); },
-  cards: () => { userSheet = 'cards'; mode = null; harvestPick = null; render(); },
+  trade: () => { userSheet = userSheet === 'trade' ? null : 'trade'; mode = null; resetDraft(); render(); },
+  cards: () => { userSheet = userSheet === 'cards' ? null : 'cards'; mode = null; harvestPick = null; render(); },
   close: () => { userSheet = null; harvestPick = null; render(); },
   fit: () => panZoom.fit(),
+  undo: () => undo(),
+  sound: () => { $('sound').textContent = toggleSound() ? '🔊' : '🔇'; },
   menu: () => { if (S.phase === 'over') return exit(); userSheet = 'leave'; mode = null; render(); },
   leave: () => exit(),
   uncover: () => { cover = null; render(); },
   newgame: () => exit(),
+  'bank-trade': () => {
+    if (dispatch({ type: 'bankTrade', player: viewer, give: clean(draft.give), get: clean(draft.get) })) {
+      sfx.trade();
+      resetDraft();
+      userSheet = 'trade';
+      render();
+    }
+  },
+  offer: () => {
+    if (dispatch({ type: 'offerTrade', player: viewer, give: clean(draft.give), get: clean(draft.get) })) backToTrade = true;
+  },
+  'cancel-offer': () => dispatch({ type: 'cancelTrade', player: viewer }),
+  discard: () => dispatch({ type: 'discard', player: viewer, cards: discardPick }),
 };
 
 function exit() {
   stopGame();
   onExit();
+}
+
+// Add/remove one card on one side of the trade being built.
+function adjustDraft(side, r, delta) {
+  const other = side === 'give' ? 'get' : 'give';
+  const max = side === 'give' ? S.players[viewer].hand[r] : 19;
+  draft[side][r] = Math.min(max, Math.max(0, (draft[side][r] ?? 0) + delta));
+  if (draft[side][r] > 0) draft[other][r] = 0;
 }
 
 document.addEventListener('click', (e) => {
@@ -233,39 +310,28 @@ document.addEventListener('click', (e) => {
   if (!b || b.disabled) return;
   const d = b.dataset;
   if (ACTIONS[d.act]) return ACTIONS[d.act]();
-  const n = (x) => Number(x);
+  const n = Number;
   switch (d.act) {
-    case 'draft': {
-      const side = draft[d.side];
-      side[d.res] = Math.max(0, (side[d.res] ?? 0) + n(d.delta));
-      if (d.side === 'give') side[d.res] = Math.min(side[d.res], S.players[viewer].hand[d.res]);
-      if (side[d.res] > 0) draft[d.side === 'give' ? 'get' : 'give'][d.res] = 0;
-      return render();
-    }
-    case 'bank-pick':
-      bankPick[d.side] = bankPick[d.side] === d.res ? null : d.res;
-      return render();
-    case 'bank-trade':
-      if (dispatch({ type: 'bankTrade', player: viewer, give: bankPick.give, get: bankPick.get })) {
-        bankPick = { give: null, get: null };
-        userSheet = 'trade';
+    case 'hand-card':
+      // Tap a card in your hand: start (or add to) a trade with it.
+      if (userSheet === 'trade' || canTradeNow()) {
+        if (userSheet !== 'trade') { resetDraft(); userSheet = 'trade'; mode = null; }
+        adjustDraft('give', d.res, 1);
         render();
       }
       return;
-    case 'offer': {
-      const clean = (x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v > 0));
-      dispatch({ type: 'offerTrade', player: viewer, give: clean(draft.give), get: clean(draft.get) });
-      return;
-    }
+    case 'tt':
+      adjustDraft(d.side, d.res, n(d.delta));
+      return render();
     case 'respond': return dispatch({ type: 'respondTrade', player: n(d.player), accept: d.accept === '1' });
-    case 'confirm': return dispatch({ type: 'confirmTrade', player: viewer, with: n(d.with) });
-    case 'cancel-offer': return dispatch({ type: 'cancelTrade', player: viewer });
+    case 'confirm':
+      if (dispatch({ type: 'confirmTrade', player: viewer, with: n(d.with) })) sfx.trade();
+      return;
     case 'discard-pick': {
       const have = S.players[viewer].hand[d.res];
       discardPick[d.res] = Math.min(have, Math.max(0, (discardPick[d.res] ?? 0) + n(d.delta)));
       return render();
     }
-    case 'discard': return dispatch({ type: 'discard', player: viewer, cards: discardPick });
     case 'steal': return dispatch({ type: 'steal', player: viewer, victim: n(d.victim) });
     case 'play': {
       if (d.card === 'harvest') { harvestPick = []; return render(); }
@@ -290,8 +356,9 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// ---- Drawing ----
+// ---- Little messages ----
 
+let toastTimer = null, noteTimer = null, bannerTimer = null;
 function toast(text) {
   const t = $('toast');
   t.textContent = text;
@@ -299,12 +366,163 @@ function toast(text) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
+// A small, quiet message at the side of the board.
+function note(text) {
+  const t = $('note');
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => t.classList.remove('show'), 3200);
+}
+// A big message across the board for important moments.
+function banner(html, cls = '') {
+  const b = $('banner');
+  b.className = `banner show ${cls}`;
+  b.innerHTML = html;
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => { b.className = 'banner'; }, 1900);
+}
+
+const describe = (cards) => Object.entries(cards).map(([r, n]) => `${n} ${NAMES[r].toLowerCase()}`).join(' + ');
+
+// ---- Animations and sounds for what just changed ----
+
+function showEvents(prev, next) {
+  const svg = $('board');
+  const fresh = (next.logCount ?? 0) - (prev.logCount ?? 0);
+  const newLines = fresh > 0 ? next.log.slice(-fresh) : [];
+  const rolled = next.turn.rolled && next.turn.dice && prev.turn.dice !== next.turn.dice;
+  const slow = Math.max(SPEED, 0.3);
+
+  if (rolled) {
+    rollDice(next.turn.dice);
+    const sum = next.turn.dice[0] + next.turn.dice[1];
+    if (sum === 7) setTimeout(() => { banner('🎲 7! The bandit strikes', 'danger'); sfx.bandit(); }, 900 * slow);
+    else setTimeout(() => flyProduction(prev, next, sum), 800 * slow);
+  } else {
+    showHandChanges(prev, next);
+  }
+
+  if (prev.bandit !== next.bandit) {
+    ripple(svg, next.bandit);
+    sfx.bandit();
+  }
+  for (const line of newLines) {
+    if (line.includes('played Soldier')) {
+      banner(`⚔️ ${esc(line.replace(' played Soldier', ''))} plays a Soldier!`, 'soldier');
+      sfx.soldier();
+    } else if (/played (Monopoly|Harvest|Road Crew)/.test(line)) {
+      banner(`✨ ${esc(line)}`);
+    } else if (/takes the (Longest Route|Strongest Army)/.test(line)) {
+      banner(`🏅 ${esc(line)}`, 'award');
+    } else if (/stole a card|traded with|discarded/.test(line)) {
+      note(line);
+    } else if (/built a (road|settlement|city)/.test(line)) {
+      sfx.build();
+    }
+  }
+  if (next.phase === 'over' && prev.phase !== 'over') sfx.win();
+  const myTurnStarts = next.phase === 'play' && next.current === viewer && isHuman(viewer) &&
+    !next.turn.rolled && (prev.current !== next.current || prev.phase !== 'play');
+  if (myTurnStarts) { sfx.turn(); if (humanCount() === 1) banner('Your turn!', 'turn'); }
+  if (handSize(next.players[viewer].hand) > DISCARD_LIMIT && handSize(prev.players[viewer].hand) <= DISCARD_LIMIT) sfx.warn();
+}
+
+// Two big dice tumble in the middle of the board.
+const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
+const die = (n) => `<div class="die">${Array.from({ length: 9 }, (_, i) => `<i class="${PIPS[n].includes(i + 1) ? 'on' : ''}"></i>`).join('')}</div>`;
+
+function rollDice([a, b]) {
+  const box = $('dicepop');
+  box.innerHTML = `${die(a)}${die(b)}<span class="sum">${a + b}</span>`;
+  box.className = 'dicepop';
+  void box.offsetWidth; // restart the animation
+  box.className = 'dicepop show';
+  sfx.dice();
+  clearTimeout(box._t);
+  box._t = setTimeout(() => { box.className = 'dicepop'; }, 1700 * Math.max(SPEED, 0.4));
+}
+
+// Cards fly from each producing tile to the player who gets them.
+function flyProduction(prev, next, sum) {
+  if (!S) return;
+  const svg = $('board');
+  const gained = next.players.map((p) => Object.fromEntries(RESOURCES.map((r) => [r, p.hand[r] - prev.players[p.id].hand[r]])));
+  let delay = 0;
+  let mine = false;
+  for (const h of next.board.hexes) {
+    if (h.number !== sum || h.id === next.bandit) continue;
+    const c = hexCentre(h.id);
+    const from = toScreen(svg, c.x, c.y);
+    for (const corner of HEX_CORNERS[h.id]) {
+      const b = next.buildings[corner];
+      if (!b) continue;
+      const n = Math.min(b.type === 'city' ? 2 : 1, gained[b.player][h.resource]);
+      for (let i = 0; i < n; i++) {
+        gained[b.player][h.resource]--;
+        if (b.player === viewer) mine = true;
+        flyCard(h.resource, from, targetFor(b.player, h.resource), delay);
+        delay += 110;
+      }
+    }
+  }
+  if (mine) setTimeout(() => sfx.coin(), 650);
+  setTimeout(() => showHandChanges(prev, next), (750 + delay) * Math.max(SPEED, 0.3));
+}
+
+// Where a player's cards go on screen: your hand slot, or their chip.
+function targetFor(p, r) {
+  const el = p === viewer && !cover ? document.querySelector(`.res[data-res="${r}"]`) : document.querySelector(`[data-chip="${p}"]`);
+  const rect = el.getBoundingClientRect();
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+
+function flyCard(r, from, to, delay) {
+  const el = document.createElement('div');
+  el.className = 'fly';
+  el.innerHTML = `<span class="card" style="--rc:${RESOURCE_COLOUR[r]}">${icon(r)}</span>`;
+  el.style.transform = `translate(${from.x - 15}px, ${from.y - 19}px) scale(1.4)`;
+  document.body.append(el);
+  setTimeout(() => {
+    el.style.transform = `translate(${to.x - 15}px, ${to.y - 19}px) scale(.8)`;
+    el.style.opacity = '0.3';
+  }, 30 + delay * SPEED);
+  setTimeout(() => el.remove(), 950 + delay * SPEED);
+}
+
+// "+2" / "-1" bubbles on the players whose cards changed.
+function showHandChanges(prev, next) {
+  if (!S) return;
+  for (const p of next.players) {
+    const diff = handSize(p.hand) - handSize(prev.players[p.id].hand);
+    if (!diff) continue;
+    const chip = document.querySelector(`[data-chip="${p.id}"]`);
+    if (!chip) continue;
+    const r = chip.getBoundingClientRect();
+    const el = document.createElement('div');
+    el.className = `delta ${diff > 0 ? 'up' : 'down'}`;
+    el.textContent = diff > 0 ? `+${diff}` : `${diff}`;
+    el.style.left = `${r.x + r.width - 20}px`;
+    el.style.top = `${r.y + r.height - 8}px`;
+    document.body.append(el);
+    setTimeout(() => el.remove(), 1500);
+    if (p.id === viewer && !cover) {
+      for (const res of RESOURCES) {
+        if (p.hand[res] > prev.players[p.id].hand[res]) document.querySelector(`.res[data-res="${res}"]`)?.classList.add('bump');
+      }
+    }
+  }
+}
+
+// ---- Drawing ----
 
 const icon = (r) => `<svg class="ico" viewBox="-24 -18 48 36"><use href="#i-${r}" x="-24" y="-18" width="48" height="36"/></svg>`;
 const chips = (cards) => Object.entries(cards).filter(([, n]) => n > 0)
   .map(([r, n]) => `<span class="mini" style="--rc:${RESOURCE_COLOUR[r]}">${icon(r)}<b>${n}</b></span>`).join('') || '—';
 const costDots = (cost) => `<span class="cost">${Object.entries(cost)
   .flatMap(([r, n]) => Array(n).fill(`<i style="background:${RESOURCE_COLOUR[r]}"></i>`)).join('')}</span>`;
+const ROAD_ICON = '<svg class="si" viewBox="0 0 12 12"><path d="M3 11 L5 1 M9 11 L7 1" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M6 2v1.5M6 5.5V7M6 9.5V11" stroke="currentColor" stroke-width="1"/></svg>';
+const SWORD_ICON = '<svg class="si" viewBox="0 0 12 12"><path d="M10.5 1.5 4 8M2.5 6.5l3 3M2 10l1.5-1.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>';
 
 function render() {
   if (!S) return;
@@ -318,6 +536,7 @@ function render() {
   renderDock(legal);
   renderSheet(legal);
   renderCover();
+  $('undo').hidden = !undoStack.length || !!cover || S.phase === 'over';
 }
 
 function boardTargets(legal) {
@@ -332,13 +551,18 @@ function renderPlayers() {
   $('players').innerHTML = S.players.map((p) => {
     const showAll = S.phase === 'over' || (p.id === viewer && !cover);
     const pts = points(S, p.id, { includeHidden: showAll });
+    const cards = handSize(p.hand);
     const cls = [p.id === S.current ? 'current' : '', p.id === viewer && humanCount() > 1 ? 'viewer' : ''].join(' ');
-    return `<div class="chip ${cls}" style="--c:${PLAYER_COLOURS[p.id]}">
+    const army = S.largestArmy.player === p.id ? 'hold' : '';
+    const road = S.longestRoad.player === p.id ? 'hold' : '';
+    return `<div class="chip ${cls}" data-chip="${p.id}" style="--c:${PLAYER_COLOURS[p.id]}">
       <div class="chip-name"><span class="dot"></span>${esc(p.name)}</div>
       <div class="chip-stats"><b>${pts}</b><span class="lbl">pts</span>
-        <span class="stat-cards" title="Resource cards">${handSize(p.hand)}</span>
+        <span class="stat-cards ${cards > DISCARD_LIMIT ? 'danger' : ''}" title="Resource cards">${cards}</span>
         <span class="stat-bonus" title="Bonus cards">${p.cards.length}</span></div>
-      <div class="badges">${S.longestRoad.player === p.id ? '<span>Route</span>' : ''}${S.largestArmy.player === p.id ? '<span>Army</span>' : ''}</div>
+      <div class="chip-extra">
+        <span class="${army}" title="Soldiers played">${SWORD_ICON}${p.soldiers}</span>
+        <span class="${road}" title="Longest road">${ROAD_ICON}${longestRoadFor(S, p.id)}</span></div>
     </div>`;
   }).join('');
 }
@@ -354,7 +578,7 @@ function statusText() {
   if (S.pending?.type === 'discard') return S.pending.counts[me] ? `Too many cards: discard ${S.pending.counts[me]}` : 'Waiting for discards…';
   if (S.pending?.type === 'moveBandit') return S.current === me ? 'Move the bandit: tap a glowing tile' : `${cur.name} is moving the bandit…`;
   if (S.pending?.type === 'steal') return S.current === me ? 'Pick who to steal from' : `${cur.name} is stealing…`;
-  if (S.trade) return S.trade.from === me ? 'Waiting for answers to your offer…' : `${S.players[S.trade.from].name} wants to trade`;
+  if (S.trade) return S.trade.from === me ? 'Waiting for answers (timer paused)' : `${S.players[S.trade.from].name} wants to trade`;
   if (S.current !== me) return `${cur.name}'s turn…`;
   if (S.turn.freeRoads) return `Place ${S.turn.freeRoads} free road${S.turn.freeRoads > 1 ? 's' : ''}`;
   if (!S.turn.rolled) return 'Your turn: roll the dice';
@@ -366,32 +590,42 @@ function renderStatus() {
   $('msg').textContent = statusText();
   $('log').textContent = S.log.at(-1) ?? '';
   const d = S.turn.dice;
-  $('dice').innerHTML = d && S.phase === 'play' ? `<span>${DICE[d[0]]}</span><span>${DICE[d[1]]}</span>` : '';
+  $('dice').innerHTML = d && S.phase === 'play' ? `${die(d[0])}${die(d[1])}<span class="dsum">${d[0] + d[1]}</span>` : '';
   $('status').style.setProperty('--c', PLAYER_COLOURS[S.current]);
 }
 
 function renderDock(legal) {
   const pl = S.players[viewer];
   const hidden = !!cover;
-  $('hand').innerHTML = hidden ? '' : RESOURCES.map((r) => `
-    <div class="res" style="--rc:${RESOURCE_COLOUR[r]}">${icon(r)}<b>${pl.hand[r]}</b><small>${NAMES[r]}</small></div>`).join('');
+  const size = handSize(pl.hand);
+  const danger = !hidden && size > DISCARD_LIMIT;
+  const handEl = $('hand');
+  handEl.classList.toggle('danger', danger);
+  $('warn').hidden = !danger;
+  $('warn').textContent = danger ? `⚠️ ${size} cards: a 7 would cost you ${Math.floor(size / 2)}` : '';
+  handEl.innerHTML = hidden ? '' : RESOURCES.map((r) => {
+    const n = pl.hand[r];
+    const layers = Math.max(1, Math.min(n, 4));
+    return `<button class="res ${n ? '' : 'empty'}" data-act="hand-card" data-res="${r}" style="--rc:${RESOURCE_COLOUR[r]}">
+      <span class="stack">${Array.from({ length: layers }, (_, i) => `<span class="card" style="--i:${i}">${icon(r)}</span>`).join('')}</span>
+      <b class="count">${n}</b><small>${NAMES[r]}</small></button>`;
+  }).join('');
   const has = (t) => legal.some((a) => a.type === t);
-  const myMain = S.phase === 'play' && S.current === viewer && !S.pending && !S.trade && !hidden;
   const btn = (act, label, enabled, extra = '', cls = '') =>
-    `<button data-act="${act}" class="act ${cls} ${mode === act ? 'on' : ''}" ${enabled ? '' : 'disabled'}>${label}${extra}</button>`;
+    `<button data-act="${act}" class="act ${cls} ${mode === act || userSheet === act ? 'on' : ''}" ${enabled ? '' : 'disabled'}>${label}${extra}</button>`;
   const free = S.turn.freeRoads > 0;
   $('actions').innerHTML = [
     btn('road', 'Road', has('buildRoad') && !free, costDots(COSTS.road)),
     btn('settlement', 'House', has('buildSettlement'), costDots(COSTS.settlement)),
     btn('city', 'City', has('buildCity'), costDots(COSTS.city)),
     btn('buy', 'Card', has('buyCard'), costDots(COSTS.card)),
-    btn('trade', 'Trade', myMain && S.turn.rolled && !free),
+    btn('trade', 'Trade', canTradeNow()),
     btn('cards', `Cards <span class="count">${pl.cards.length}</span>`, !hidden && pl.cards.length > 0),
     has('roll') ? btn('roll', 'Roll', true, '', 'primary') : btn('end', 'End turn', has('endTurn'), '', 'primary'),
   ].join('');
 }
 
-// ---- Bottom sheets ----
+// ---- Panels (they sit above your hand, so your cards stay visible) ----
 
 function renderSheet(legal) {
   const sheet = $('sheet');
@@ -399,7 +633,10 @@ function renderSheet(legal) {
   sheet.classList.toggle('open', !!kind);
   if (!kind) { sheet.innerHTML = ''; return; }
   const close = ['trade', 'cards', 'leave'].includes(kind) ? '<button class="close" data-act="close" aria-label="Close">✕</button>' : '';
-  const body = { discard: discardSheet, steal: stealSheet, offer: offerSheet, myOffer: myOfferSheet, trade: tradeSheet, cards: cardsSheet, leave: leaveSheet }[kind](legal);
+  const body = {
+    discard: discardSheet, steal: stealSheet, offer: offerSheet, myOffer: myOfferSheet,
+    trade: tradeSheet, cards: cardsSheet, leave: leaveSheet,
+  }[kind](legal);
   sheet.innerHTML = `<div class="sheet-inner">${close}${body}</div>`;
 }
 
@@ -407,9 +644,11 @@ function autoSheet() {
   if (cover || S.phase === 'over') return null;
   if (S.pending?.type === 'discard' && S.pending.counts[viewer] && isHuman(viewer)) return 'discard';
   if (S.pending?.type === 'steal' && S.current === viewer) return 'steal';
-  if (S.trade) {
-    if (S.trade.from === viewer) return 'myOffer';
-    if (!isHuman(S.trade.from) && Object.keys(S.trade.responses).some((p) => isHuman(Number(p)))) return 'offer';
+  const t = S.trade;
+  if (t) {
+    if (t.from === viewer) return 'myOffer';
+    const askable = Object.entries(t.responses).some(([p, r]) => isHuman(Number(p)) && r === null && hasCards(S.players[p].hand, t.get));
+    if (!isHuman(t.from) && askable) return 'offer';
   }
   return null;
 }
@@ -417,20 +656,18 @@ function autoSheet() {
 function discardSheet() {
   const need = S.pending.counts[viewer];
   const hand = S.players[viewer].hand;
-  const picked = Object.values(discardPick).reduce((a, b) => a + b, 0);
+  const picked = total(discardPick);
   return `<h3>Discard ${need} cards</h3><p class="sub">You have more than 7 cards and a 7 was rolled.</p>
-    <div class="steppers">${RESOURCES.filter((r) => hand[r] > 0).map((r) => stepper(r, discardPick[r] ?? 0, hand[r], 'discard-pick')).join('')}</div>
+    <div class="steppers">${RESOURCES.filter((r) => hand[r] > 0).map((r) => stepper(r, discardPick[r] ?? 0, hand[r])).join('')}</div>
     <button class="primary wide" data-act="discard" ${picked === need ? '' : 'disabled'}>Discard ${picked} / ${need}</button>`;
 }
 
-function stepper(r, value, max, act, side = '') {
-  const sideAttr = side ? `data-side="${side}"` : '';
+function stepper(r, value, max) {
   return `<div class="stepper" style="--rc:${RESOURCE_COLOUR[r]}">
-    <span class="ic">${icon(r)}${max !== null ? `<small class="have">have ${max}</small>` : ''}</span>
-    <span class="nm">${NAMES[r]}</span>
-    <button data-act="${act}" ${sideAttr} data-res="${r}" data-delta="-1" ${value ? '' : 'disabled'}>−</button>
+    <span class="ic">${icon(r)}<small class="have">have ${max}</small></span><span class="nm">${NAMES[r]}</span>
+    <button data-act="discard-pick" data-res="${r}" data-delta="-1" ${value ? '' : 'disabled'}>−</button>
     <b>${value}</b>
-    <button data-act="${act}" ${sideAttr} data-res="${r}" data-delta="1" ${max !== null && value >= max ? 'disabled' : ''}>+</button>
+    <button data-act="discard-pick" data-res="${r}" data-delta="1" ${value >= max ? 'disabled' : ''}>+</button>
   </div>`;
 }
 
@@ -440,37 +677,39 @@ function stealSheet() {
       <span class="dot"></span>${esc(S.players[v].name)}<small>${handSize(S.players[v].hand)} cards</small></button>`).join('')}</div>`;
 }
 
-// A bot (or other player) offers a trade; humans at the table answer.
+// A bot offers a trade; only humans who could accept are asked.
 function offerSheet() {
   const t = S.trade;
   const from = S.players[t.from];
-  const rows = Object.entries(t.responses).filter(([p]) => isHuman(Number(p))).map(([p, r]) => {
+  const rows = Object.entries(t.responses).filter(([p]) => isHuman(Number(p)) && hasCards(S.players[p].hand, t.get)).map(([p, r]) => {
     const id = Number(p);
-    const can = hasCards(S.players[id].hand, t.get);
     const answer = r === null
-      ? `<button data-act="respond" data-player="${id}" data-accept="0">Decline</button>
-         <button class="primary" data-act="respond" data-player="${id}" data-accept="1" ${can ? '' : 'disabled'}>Accept</button>`
+      ? `<button data-act="respond" data-player="${id}" data-accept="0">No</button>
+         <button class="primary" data-act="respond" data-player="${id}" data-accept="1">Accept</button>`
       : `<span class="answer ${r}">${r === 'accept' ? 'Accepted' : 'Declined'}</span>`;
-    return `<div class="resp" style="--c:${PLAYER_COLOURS[id]}"><span class="dot"></span>${esc(S.players[id].name)}
-      ${!can && r === null ? '<small>not enough cards</small>' : ''}<span class="grow"></span>${answer}</div>`;
+    return `<div class="resp" style="--c:${PLAYER_COLOURS[id]}"><span class="dot"></span>${esc(S.players[id].name)}<span class="grow"></span>${answer}</div>`;
   }).join('');
   return `<h3>${esc(from.name)} offers a trade</h3>
     <div class="deal"><div><small>You get</small>${chips(t.give)}</div><div class="arrow">⇄</div><div><small>You give</small>${chips(t.get)}</div></div>
     ${rows}`;
 }
 
-// The viewer's own open offer: see answers, pick a partner or cancel.
+// Your own open offer: see answers and counter-offers, pick one or cancel.
 function myOfferSheet() {
   const t = S.trade;
   const rows = Object.entries(t.responses).map(([p, r]) => {
     const id = Number(p);
     let right;
     if (r === 'accept') right = `<button class="primary" data-act="confirm" data-with="${id}">Trade</button>`;
-    else if (r === 'decline') right = '<span class="answer decline">Declined</span>';
+    else if (r === 'counter') {
+      const deal = dealWith(t, id);
+      right = `<span class="counter">gives ${chips(deal.get)} for ${chips(deal.give)}</span>
+        <button class="primary" data-act="confirm" data-with="${id}">OK</button>`;
+    } else if (r === 'decline') right = '<span class="answer decline">No thanks</span>';
     else if (isHuman(id)) {
       const can = hasCards(S.players[id].hand, t.get);
-      right = `<button data-act="respond" data-player="${id}" data-accept="0">No</button>
-        <button data-act="respond" data-player="${id}" data-accept="1" ${can ? '' : 'disabled'}>Yes</button>`;
+      right = can ? `<button data-act="respond" data-player="${id}" data-accept="0">No</button>
+        <button data-act="respond" data-player="${id}" data-accept="1">Yes</button>` : '<span class="answer wait">…</span>';
     } else right = '<span class="answer wait">Thinking…</span>';
     return `<div class="resp" style="--c:${PLAYER_COLOURS[id]}"><span class="dot"></span>${esc(S.players[id].name)}<span class="grow"></span>${right}</div>`;
   }).join('');
@@ -480,29 +719,33 @@ function myOfferSheet() {
     <button class="wide" data-act="cancel-offer">Cancel offer</button>`;
 }
 
+// Colonist-style: pick cards to give (tap your hand or the tiles) and to
+// get, then trade with the bank (if the numbers match) or offer to players.
 function tradeSheet() {
   const hand = S.players[viewer].hand;
-  const bankBtn = (side, r) => {
-    const ratio = tradeRatio(S, viewer, r);
-    const ok = side === 'give' ? hand[r] >= ratio : S.bank[r] > 0;
-    const on = bankPick[side] === r ? 'on' : '';
-    return `<button class="pick ${on}" data-act="bank-pick" data-side="${side}" data-res="${r}" style="--rc:${RESOURCE_COLOUR[r]}" ${ok ? '' : 'disabled'}>
-      ${icon(r)}${side === 'give' ? `<small>${ratio}:1</small>` : ''}</button>`;
+  const give = clean(draft.give), get = clean(draft.get);
+  const tile = (side, r) => {
+    const n = draft[side][r] ?? 0;
+    const full = side === 'give' && n >= hand[r];
+    return `<div class="ttile ${n ? 'on' : ''}" style="--rc:${RESOURCE_COLOUR[r]}">
+      <button class="tadd" data-act="tt" data-side="${side}" data-res="${r}" data-delta="1" ${full ? 'disabled' : ''}>
+        ${icon(r)}${side === 'give' ? `<small>${tradeRatio(S, viewer, r)}:1</small>` : ''}</button>
+      ${n ? `<b>${n}</b><button class="tminus" data-act="tt" data-side="${side}" data-res="${r}" data-delta="-1" aria-label="Remove one">−</button>` : ''}
+    </div>`;
   };
-  const canBank = bankPick.give && bankPick.get && bankPick.give !== bankPick.get;
-  const giveN = Object.values(draft.give).reduce((a, b) => a + b, 0);
-  const getN = Object.values(draft.get).reduce((a, b) => a + b, 0);
+  const bankErr = bankTradeError(S, viewer, give, get);
+  const canOffer = total(give) > 0 && total(get) > 0;
+  let hint = 'Tap your cards (or the tiles) to choose what to give, then what you want.';
+  if (total(give) && !total(get)) hint = 'Now choose what you want.';
+  else if (total(give) && total(get)) hint = bankErr ? `Bank: ${bankErr}` : 'The bank will take this deal.';
   return `<h3>Trade</h3>
-    <h4>With the bank</h4>
-    <div class="pick-row"><span class="pr-lbl">Give</span>${RESOURCES.map((r) => bankBtn('give', r)).join('')}</div>
-    <div class="pick-row"><span class="pr-lbl">Get</span>${RESOURCES.map((r) => bankBtn('get', r)).join('')}</div>
-    <button class="wide" data-act="bank-trade" ${canBank ? '' : 'disabled'}>Trade with bank</button>
-    <h4>With players</h4>
-    <div class="two-col">
-      <div><small>You give</small>${RESOURCES.map((r) => stepper(r, draft.give[r] ?? 0, hand[r], 'draft', 'give')).join('')}</div>
-      <div><small>You want</small>${RESOURCES.map((r) => stepper(r, draft.get[r] ?? 0, null, 'draft', 'get')).join('')}</div>
-    </div>
-    <button class="primary wide" data-act="offer" ${giveN && getN ? '' : 'disabled'}>Offer to players</button>`;
+    <div class="trow"><span class="tl">Give</span>${RESOURCES.map((r) => tile('give', r)).join('')}</div>
+    <div class="trow"><span class="tl">Get</span>${RESOURCES.map((r) => tile('get', r)).join('')}</div>
+    <p class="sub hint-line ${total(give) && total(get) && !bankErr ? 'ok' : ''}">${esc(hint)}</p>
+    <div class="tbtns">
+      <button data-act="bank-trade" ${bankErr ? 'disabled' : ''}>🏦 Bank</button>
+      <button class="primary" data-act="offer" ${canOffer ? '' : 'disabled'}>Offer to players</button>
+    </div>`;
 }
 
 function leaveSheet() {
