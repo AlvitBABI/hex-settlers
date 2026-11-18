@@ -2,6 +2,7 @@
 import { COSTS, RESOURCES } from './constants.js';
 import { nextInt } from './rng.js';
 import { CORNER_EDGES, CORNER_NEIGHBOURS, EDGE_CORNERS, CORNER_HEXES, HEX_CORNERS } from './topology.js';
+import { startSeven } from './bandit.js';
 import { emptyHand, hasCards, moveCards, newTurn, log, nameOf, mainTurnError } from './helpers.js';
 
 // ---- Placement checks (also used by bots and the UI) ----
@@ -120,7 +121,8 @@ function roll(s, { player }) {
   s.turn.rolled = true;
   s.turn.dice = dice;
   log(s, `${nameOf(s, player)} rolled ${total}`);
-  if (total !== 7) produce(s, total); // a 7 produces nothing
+  if (total === 7) startSeven(s); // a 7 produces nothing: the bandit moves
+  else produce(s, total);
 }
 
 // Shared checks for paid building: your turn, rolled, can afford, have pieces.
