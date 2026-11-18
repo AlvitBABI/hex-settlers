@@ -35,7 +35,8 @@ function tone(freq, dur, { type = 'sine', vol = 0.15, at = 0, slide = 0 } = {}) 
   osc.stop(t + dur + 0.02);
 }
 
-function noise(dur, vol, at = 0) {
+// A short burst of soft, muffled noise (lowpass-filtered).
+function noise(dur, vol, at = 0, cutoff = 1800) {
   if (!on || !ctx) return;
   const t = ctx.currentTime + at;
   const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
@@ -45,12 +46,15 @@ function noise(dur, vol, at = 0) {
   const gain = ctx.createGain();
   src.buffer = buf;
   gain.gain.value = vol;
-  src.connect(gain).connect(ctx.destination);
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = cutoff;
+  src.connect(filter).connect(gain).connect(ctx.destination);
   src.start(t);
 }
 
 export const sfx = {
-  dice() { for (let i = 0; i < 6; i++) noise(0.05, 0.25, i * 0.08); tone(300, 0.08, { at: 0.5, type: 'triangle' }); },
+  dice() { [0, 0.11, 0.2, 0.33].forEach((at, i) => noise(0.035, 0.05 - i * 0.008, at, 1400)); },
   coin() { tone(880, 0.08, { vol: 0.1 }); tone(1320, 0.14, { at: 0.06, vol: 0.1 }); },
   build() { tone(160, 0.14, { type: 'triangle', vol: 0.3 }); tone(240, 0.12, { at: 0.06, type: 'triangle', vol: 0.2 }); },
   trade() { tone(660, 0.1); tone(990, 0.16, { at: 0.08 }); },

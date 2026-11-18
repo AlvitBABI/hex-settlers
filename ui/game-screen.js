@@ -152,6 +152,11 @@ function nextAuto() {
   return null;
 }
 
+// A new roll happened between prev and next (compare the turn, not the dice
+// array: every move copies the state, so the array is always a new object).
+const newRoll = (prev, next) => !!(next.turn.rolled && next.turn.dice &&
+  (!prev.turn.rolled || prev.turn.number !== next.turn.number));
+
 const timedOut = () => expiredKey !== null && expiredKey === deadlineKey;
 
 function scheduleAuto(prev) {
@@ -159,7 +164,7 @@ function scheduleAuto(prev) {
   const next = nextAuto();
   if (!next) return;
   // Give people time to see what just happened before the next bot move.
-  const justRolled = prev && S.turn.rolled && S.turn.dice && prev.turn.dice !== S.turn.dice;
+  const justRolled = prev && newRoll(prev, S);
   const banditMoved = prev && prev.bandit !== S.bandit;
   let delay = isHuman(next.player) ? (next.type === 'respondTrade' ? 300 : 150)
     : S.phase === 'setup' ? 500
@@ -391,7 +396,7 @@ function showEvents(prev, next) {
   const svg = $('board');
   const fresh = (next.logCount ?? 0) - (prev.logCount ?? 0);
   const newLines = fresh > 0 ? next.log.slice(-fresh) : [];
-  const rolled = next.turn.rolled && next.turn.dice && prev.turn.dice !== next.turn.dice;
+  const rolled = newRoll(prev, next);
   const slow = Math.max(SPEED, 0.3);
 
   if (rolled) {
