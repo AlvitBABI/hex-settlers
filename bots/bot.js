@@ -24,7 +24,6 @@ function guessCount(s, me, other, r) {
 
 const pips = (n) => (n ? 6 - Math.abs(7 - n) : 0);
 const WEIGHT = { wood: 1, clay: 1, sheep: 0.85, wheat: 1.1, ore: 1.1, desert: 0 };
-const MAX_OFFERS = 2;     // trade offers a bot makes per turn (the 2nd is more generous)
 // How much better than even a deal must be, per seat: bots differ a little.
 const PICKINESS = [0.2, 0.45, 0.3, 0.6];
 const LEADER_POINTS = 8;  // bots won't trade with someone this close to winning
@@ -181,6 +180,18 @@ export function dealScore(s, p, get, give) {
   return (missing(hand, cost) - missing(after, cost)) * 2 + worth(get) - worth(give);
 }
 
+// How chatty bots are with trade offers, per game mode. A "round" is one
+// turn for every player (in Rush: one dice roll).
+const OFFER_RULES = {
+  classic: { perTurn: 2, skipRound: (round) => round % 4 === 3 },  // sits out 1 round in 4
+  rush: { perTurn: 1, skipRound: (round) => round % 3 !== 0 },     // only 1 round in 3
+};
+function offerRules(s) {
+  const rules = OFFER_RULES[s.mode] ?? OFFER_RULES.classic;
+  const round = s.mode === 'rush' ? s.turn.number : Math.floor((s.turn.number - 1) / s.players.length);
+  return { perTurn: rules.perTurn, allowed: !rules.skipRound(round) };
+}
+
 const pickiness = (p) => PICKINESS[p % PICKINESS.length];
 const nearWin = (s, p) => points(s, p, { includeHidden: false }) >= LEADER_POINTS;
 
@@ -319,7 +330,9 @@ export function chooseAction(s, p) {
     const spare = surplus(pl.hand, g.cost);
     const short = missing(pl.hand, g.cost);
     const get = want.find((r) => s.players.some((o) => o.id !== p && mayHave(s, p, o.id, r)));
-    if (s.turn.offers < MAX_OFFERS && spare.length && get && short <= 2) {
+    const rules = offerRules(s);
+    const offers = s.turn.offers;
+    if (rules.allowed && offers < rules.perTurn && spare.length && get && short <= 2) {
       let give = null;
       if (s.turn.offers === 0) give = { [spare[0]]: 1 };
       else {
