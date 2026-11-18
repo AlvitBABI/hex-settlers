@@ -54,6 +54,7 @@ export function createGame({ seed, players }) {
     largestArmy: { player: null, count: 0 },
     winner: null,
     log: [],
+    logCount: 0,
   };
 }
 

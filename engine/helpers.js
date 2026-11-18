@@ -30,8 +30,11 @@ export const newTurn = (number) => ({
   number, rolled: false, dice: null, cardPlayed: false, freeRoads: 0, offers: 0,
 });
 
+// Keeps the last 40 messages; logCount counts every message ever, so the
+// screen can tell which ones are new.
 export function log(state, text) {
   state.log = [...state.log.slice(-39), text];
+  state.logCount = (state.logCount ?? 0) + 1;
 }
 
 export const nameOf = (state, p) => state.players[p].name;
