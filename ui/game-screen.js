@@ -639,6 +639,7 @@ function render() {
   renderSheet(legal);
   renderCover();
   $('undo').hidden = !undoStack.length || !!cover || S.phase === 'over';
+  panZoom?.checkSize(); // keep the zoom steady if the bars around the board changed size
 }
 
 function boardTargets(legal) {
@@ -655,15 +656,19 @@ function boardTargets(legal) {
 
 function renderPlayers() {
   $('players').innerHTML = S.players.map((p) => {
-    const showAll = S.phase === 'over' || (p.id === viewer && !cover);
-    const pts = points(S, p.id, { includeHidden: showAll });
+    // Everyone sees public points. You also see your secret Victory Point
+    // cards as "(+1)"; at the end of the game everyone's full total shows.
+    const over = S.phase === 'over';
+    const pts = points(S, p.id, { includeHidden: over });
+    const secret = p.cards.filter((c) => c.type === 'point').length;
+    const extra = !over && secret && p.id === viewer && !cover ? `<span class="secret">(+${secret})</span>` : '';
     const cards = handSize(p.hand);
     const cls = [p.id === (isRush(S) ? -1 : S.current) ? 'current' : '', p.id === viewer && humanCount() > 1 ? 'viewer' : ''].join(' ');
     const army = S.largestArmy.player === p.id ? 'hold' : '';
     const road = S.longestRoad.player === p.id ? 'hold' : '';
     return `<div class="chip ${cls}" data-chip="${p.id}" style="--c:${PLAYER_COLOURS[p.id]}">
       <div class="chip-name"><span class="dot"></span>${esc(p.name)}</div>
-      <div class="chip-stats"><b>${pts}</b><span class="lbl">pts</span>
+      <div class="chip-stats"><b>${pts}</b>${extra}<span class="lbl">pts</span>
         <span class="stat-cards ${cards > DISCARD_LIMIT ? 'danger' : ''}" title="Resource cards">${cards}</span>
         <span class="stat-bonus" title="Bonus cards">${p.cards.length}</span></div>
       <div class="chip-extra">
