@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGame, applyAction, waitingFor } from '../engine/game.js';
-import { chooseAction, timeoutAction, wantsTrade } from '../bots/bot.js';
+import { chooseAction, timeoutAction, wantsTrade, counterOffer, dealScore } from '../bots/bot.js';
 import { points } from '../engine/scoring.js';
 import { act, afterSetup, give, emptyHands } from './helpers.js';
 
@@ -82,4 +82,37 @@ test('a bot offers a trade when one card short, then confirms with an accepter',
   assert.equal(chooseAction(s, 0), null, 'waits for answers');
   for (const p of [1, 2, 3]) s = act(s, { type: 'respondTrade', player: p, accept: p === 2 });
   assert.deepEqual(chooseAction(s, 0), { type: 'confirmTrade', player: 0, with: 2 });
+});
+
+test('bots take a 2-for-1 in their favour even if they do not need it', () => {
+  let s = act(afterSetup(), { type: 'roll', player: 0 });
+  s.pending = null;
+  emptyHands(s);
+  give(s, 0, { sheep: 2 });
+  give(s, 1, { clay: 3, ore: 3, wheat: 2 }); // plenty of clay, saving for a city
+  const two = act(s, { type: 'offerTrade', player: 0, give: { sheep: 2 }, get: { clay: 1 } });
+  assert.equal(wantsTrade(two, 1), true);
+  const one = act(s, { type: 'offerTrade', player: 0, give: { sheep: 1 }, get: { clay: 1 } });
+  assert.ok(dealScore(one, 1, { sheep: 1 }, { clay: 1 }) < dealScore(two, 1, { sheep: 2 }, { clay: 1 }));
+  // Asking for city ore, even 2-for-1, is refused.
+  const ore = act(s, { type: 'offerTrade', player: 0, give: { sheep: 2 }, get: { ore: 1 } });
+  assert.equal(wantsTrade(ore, 1), false);
+});
+
+test('a bot answers a bad offer with a counter-offer it would accept', () => {
+  let s = act(afterSetup(), { type: 'roll', player: 0 });
+  s.pending = null;
+  emptyHands(s);
+  give(s, 0, { wood: 1, wheat: 1 });
+  give(s, 1, { ore: 3, sheep: 2 }); // wants wheat for a city, spare sheep
+  s = act(s, { type: 'offerTrade', player: 0, give: { wood: 1 }, get: { ore: 1 } });
+  assert.equal(wantsTrade(s, 1), false);
+  const counter = counterOffer(s, 1);
+  assert.ok(counter, 'expected a counter');
+  assert.deepEqual(counter.get, { wheat: 1 });
+  const a = chooseAction(s, 1);
+  assert.equal(a.type, 'respondTrade');
+  assert.deepEqual(a.counter, counter);
+  s = act(s, a);
+  assert.equal(s.trade.responses[1], 'counter');
 });

@@ -5,13 +5,15 @@ import { legalActions, waitingFor } from '../engine/game.js';
 import { COSTS, RESOURCES } from '../engine/constants.js';
 import { CORNER_HEXES, CORNER_NEIGHBOURS, EDGE_CORNERS, HEX_CORNERS } from '../engine/topology.js';
 import { canPlaceSettlement, legalSettlementCorners } from '../engine/turn.js';
-import { tradeRatio } from '../engine/trade.js';
+import { tradeRatio, dealWith } from '../engine/trade.js';
 import { points } from '../engine/scoring.js';
 import { handSize, hasCards } from '../engine/helpers.js';
 
 const pips = (n) => (n ? 6 - Math.abs(7 - n) : 0);
 const WEIGHT = { wood: 1, clay: 1, sheep: 0.85, wheat: 1.1, ore: 1.1, desert: 0 };
-const MAX_OFFERS = 1;     // trade offers a bot makes per turn
+const MAX_OFFERS = 2;     // trade offers a bot makes per turn (the 2nd is more generous)
+// How much better than even a deal must be, per seat: bots differ a little.
+const PICKINESS = [0.2, 0.45, 0.3, 0.6];
 const LEADER_POINTS = 8;  // bots won't trade with someone this close to winning
 
 const hexMap = (s) => new Map(s.board.hexes.map((h) => [h.id, h]));
@@ -134,22 +136,69 @@ function bestVictim(s, victims) {
     (handSize(s.players[b].hand) - handSize(s.players[a].hand)))[0];
 }
 
-// Would this bot accept the open trade? (colonist-style: only if it helps
-// them, and never with a player who is about to win.)
-export function wantsTrade(s, p) {
-  const t = s.trade;
+// How much each resource is worth to this bot right now: more if it's
+// needed for the goal or rarely collected, less if we have plenty.
+function values(s, p) {
   const hand = s.players[p].hand;
-  if (!t || !hasCards(hand, t.get)) return false;
-  if (points(s, t.from, { includeHidden: false }) >= LEADER_POINTS) return false;
+  const cost = goal(s, p).cost;
+  const inc = income(s, p);
+  const v = {};
+  for (const r of RESOURCES) {
+    let x = 1;
+    if ((cost[r] ?? 0) > hand[r]) x += 1;
+    if (inc[r] === 0) x += 0.4; else if (inc[r] < 4) x += 0.2;
+    if (hand[r] - (cost[r] ?? 0) >= 2) x -= 0.4;
+    v[r] = x;
+  }
+  return v;
+}
+
+// Score for bot p receiving `get` and paying `give` (> 0 means good).
+// Counts card values plus progress towards the goal, so a 2-for-1 or
+// 3-for-1 in the bot's favour is tempting even if it doesn't need the cards.
+export function dealScore(s, p, get, give) {
+  const hand = s.players[p].hand;
+  if (!hasCards(hand, give)) return -Infinity;
   const cost = goal(s, p).cost;
   const after = { ...hand };
-  for (const [r, n] of Object.entries(t.get)) after[r] -= n;
-  for (const [r, n] of Object.entries(t.give)) after[r] += n;
-  const before = missing(hand, cost);
-  const now = missing(after, cost);
-  const gets = Object.values(t.give).reduce((a, b) => a + b, 0);
-  const gives = Object.values(t.get).reduce((a, b) => a + b, 0);
-  return now < before || (now === before && gets > gives);
+  for (const [r, n] of Object.entries(give)) after[r] -= n;
+  for (const [r, n] of Object.entries(get)) after[r] += n;
+  const v = values(s, p);
+  const worth = (b) => Object.entries(b).reduce((t, [r, n]) => t + v[r] * n, 0);
+  return (missing(hand, cost) - missing(after, cost)) * 2 + worth(get) - worth(give);
+}
+
+const pickiness = (p) => PICKINESS[p % PICKINESS.length];
+const nearWin = (s, p) => points(s, p, { includeHidden: false }) >= LEADER_POINTS;
+
+// Would this bot accept the open trade? (colonist-style: only good deals,
+// and never with a player who is about to win.)
+export function wantsTrade(s, p) {
+  const t = s.trade;
+  if (!t || nearWin(s, t.from)) return false;
+  return dealScore(s, p, t.give, t.get) > pickiness(p);
+}
+
+const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+
+// Instead of a flat "no": propose terms this bot would take.
+export function counterOffer(s, p) {
+  const t = s.trade;
+  if (!t || nearWin(s, t.from)) return null;
+  const hand = s.players[p].hand;
+  const theirs = s.players[t.from].hand;
+  const cost = goal(s, p).cost;
+  const want = needed(hand, cost).find((r) => theirs[r] > 0);
+  if (!want) return null;
+  const options = [];
+  if (hasCards(hand, t.get)) options.push({ give: t.get, get: { [want]: 1 } }); // what you asked for, but I want this
+  for (const r of surplus(hand, cost)) options.push({ give: { [r]: 1 }, get: { [want]: 1 } });
+  for (const o of options) {
+    if (RESOURCES.some((r) => o.give[r] > 0 && o.get[r] > 0)) continue;
+    if (same(o.give, t.get) && same(o.get, t.give)) continue; // that's just "accept"
+    if (dealScore(s, p, o.get, o.give) > pickiness(p)) return o;
+  }
+  return null;
 }
 
 // Spare cards: what we hold beyond the goal's cost, most spare first.
@@ -182,15 +231,25 @@ export function chooseAction(s, p) {
   const t = s.trade;
   if (t) {
     if (t.from !== p) {
-      return t.responses[p] === null ? { type: 'respondTrade', player: p, accept: wantsTrade(s, p) } : null;
+      if (t.responses[p] !== null) return null;
+      if (wantsTrade(s, p)) return { type: 'respondTrade', player: p, accept: true };
+      const counter = counterOffer(s, p);
+      return { type: 'respondTrade', player: p, accept: false, ...(counter ? { counter } : {}) };
     }
     const answers = Object.entries(t.responses);
     if (answers.some(([, r]) => r === null)) return null; // still waiting for answers
-    const yes = answers.filter(([, r]) => r === 'accept').map(([id]) => Number(id));
-    if (!yes.length) return { type: 'cancelTrade', player: p };
-    // Trade with whoever is furthest behind (helps the leader least).
-    const partner = yes.sort((a, b) => points(s, a, { includeHidden: false }) - points(s, b, { includeHidden: false }))[0];
-    return { type: 'confirmTrade', player: p, with: partner };
+    const weakestFirst = (a, b) => points(s, a, { includeHidden: false }) - points(s, b, { includeHidden: false });
+    const yes = answers.filter(([, r]) => r === 'accept').map(([id]) => Number(id)).sort(weakestFirst);
+    if (yes.length) return { type: 'confirmTrade', player: p, with: yes[0] };
+    // Take the best counter-offer, if it's good enough.
+    let best = null, bestScore = pickiness(p);
+    for (const [id, r] of answers) {
+      if (r !== 'counter') continue;
+      const deal = dealWith(t, Number(id));
+      const score = dealScore(s, p, deal.get, deal.give);
+      if (score > bestScore) { bestScore = score; best = Number(id); }
+    }
+    return best !== null ? { type: 'confirmTrade', player: p, with: best } : { type: 'cancelTrade', player: p };
   }
 
   const pl = s.players[p];
@@ -244,14 +303,20 @@ export function chooseAction(s, p) {
       const get = want.find((r) => s.bank[r] > 0);
       if (get) return { type: 'bankTrade', player: p, give, get };
     }
+    // Ask the players, but only for a card somebody actually holds.
     const spare = surplus(pl.hand, g.cost);
-    if (s.turn.offers < MAX_OFFERS && spare.length && missing(pl.hand, g.cost) === 1) {
-      const i = s.turn.offers;
-      return {
-        type: 'offerTrade', player: p,
-        give: { [spare[i % spare.length]]: 1 },
-        get: { [want[i % want.length]]: 1 },
-      };
+    const short = missing(pl.hand, g.cost);
+    const get = want.find((r) => s.players.some((o) => o.id !== p && o.hand[r] > 0));
+    if (s.turn.offers < MAX_OFFERS && spare.length && get && short <= 2) {
+      let give = null;
+      if (s.turn.offers === 0) give = { [spare[0]]: 1 };
+      else {
+        // Second try: sweeten it to 2-for-1 if we have plenty, or offer something else.
+        const rich = spare.find((r) => pl.hand[r] - (g.cost[r] ?? 0) >= 2);
+        if (rich) give = { [rich]: 2 };
+        else if (spare.length > 1) give = { [spare[1]]: 1 };
+      }
+      if (give) return { type: 'offerTrade', player: p, give, get: { [get]: 1 } };
     }
   }
 
