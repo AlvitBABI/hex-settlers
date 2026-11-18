@@ -50,7 +50,14 @@ export function renderPieces(svg, state, { targets = [], hot = null } = {}) {
   }
 
   targets.forEach((t, i) => {
-    const g = el('g', { class: 'target', 'data-target': i });
+    const g = el('g', { class: `target${t.picked ? ' picked' : ''}`, 'data-target': i });
+    if (t.ghost) {
+      // Invisible tap area (tap-to-build): only the hit shape.
+      if (t.corner) { const { x, y } = pointFromId(t.corner); g.append(el('circle', { cx: x, cy: y, r: 16, class: 'hit' })); }
+      else if (t.edge) g.append(el('line', { ...roadLine(t.edge), class: 'hit-line' }));
+      layer.append(g);
+      return;
+    }
     if (t.corner) {
       const { x, y } = pointFromId(t.corner);
       g.append(el('circle', { cx: x, cy: y, r: 18, class: 'hit' }));

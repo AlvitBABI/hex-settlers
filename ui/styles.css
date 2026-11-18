@@ -334,3 +334,37 @@ button.big { min-height: 52px; font-size: 1.05rem; }
 .tbtns { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
 .tbtns button { min-height: 46px; }
 .counter { display: inline-flex; align-items: center; gap: 2px; font-size: .75rem; color: var(--muted); flex-wrap: wrap; }
+
+/* Bank stock */
+.bankbar { position: absolute; left: 8px; top: 8px; z-index: 4; display: flex; gap: 5px; pointer-events: none;
+  background: #0d1b2e99; padding: 5px 7px; border-radius: 12px; }
+.bk { display: flex; flex-direction: column; align-items: center; gap: 1px; font-size: .68rem; }
+.bk b { line-height: 1; }
+.bk-stack { position: relative; width: 16px; height: 22px; display: block; }
+.bk-stack i { position: absolute; left: 0; bottom: calc(var(--i) * 2px); width: 14px; height: 18px; border-radius: 3px;
+  background: var(--rc, #c792ff); border: 1px solid #fff; }
+.bk-stack i.gone { opacity: .2; }
+.bk.deck .bk-stack i { background: #c792ff; }
+.bk.mid b { color: #ffcf66; }
+.bk.low b { color: #ff6b6b; }
+.bk.low .bk-stack i { animation: pulse 1s infinite; }
+
+/* Pieces left on the build buttons */
+.act .left { font-size: .62rem; opacity: .75; }
+.act .left.none { color: #ff8a8a; opacity: 1; }
+
+/* One-tap bank lot under a trade tile */
+.tlot { display: block; width: 100%; margin-top: 10px; min-height: 26px; padding: 0; font-size: .7rem; font-weight: 700;
+  background: #ffffff1f; border-radius: 8px; }
+.tlot:not(:disabled) { color: var(--accent); }
+
+/* Tap-to-build: the picked spot glows gold */
+.target.picked .spot { fill: var(--accent); stroke: #fff; stroke-width: 3; }
+.target.picked .spot-edge { stroke: var(--accent); stroke-dasharray: none; stroke-width: 7; }
+
+/* Coloured names in notes */
+.note .dot { width: 8px; height: 8px; margin: 0 3px 0 0; vertical-align: 0; }
+.note .mini { padding: 1px 4px; }
+.note .mini .ico { width: 16px; height: 12px; }
+.note { color: #fff; }
+.sheet h3 .dot.big { vertical-align: -2px; }

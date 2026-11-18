@@ -49,6 +49,7 @@ let undoStack = [];
 let autoTimer = null;
 let deadline = null, deadlineKey = null, expiredKey = null, lastTick = Date.now(), lastBeep = null;
 let panZoom = null;
+let picked = null; // a build chosen by tapping the board, waiting for a second tap
 let rushRollAt = null; // Rush: when the dice clock rolls next
 
 const isHuman = (p) => S.players[p].kind === 'human';
@@ -108,6 +109,7 @@ function changed(prev, { save = true, quiet = false } = {}) {
   const myTurn = S.phase === 'play' && !S.pending && (isRush(S) ? S.trade?.from !== viewer : S.current === viewer && !S.trade);
   if (mode && !myTurn) mode = null;
   if (S.pending?.type !== 'discard') discardPick = {};
+  picked = null;
   if (countering !== null && S.trade?.responses[countering] !== null) countering = null;
   if (userSheet === 'trade' && (S.trade || S.pending)) userSheet = null;
   if (userSheet === 'cards' && S.pending) userSheet = null;
@@ -294,10 +296,19 @@ function rushRoll() {
 function onTap(target) {
   if (cover) return;
   const g = target.closest('[data-target]');
-  if (!g) return;
-  const action = targets[Number(g.dataset.target)];
-  if (action) { mode = null; dispatch(action); }
+  const action = g ? targets[Number(g.dataset.target)] : null;
+  if (!action) {
+    if (picked) { picked = null; render(); } // tapped empty board: cancel
+    return;
+  }
+  const { ghost, picked: _p, ...clean } = action;
+  if (ghost) { picked = clean; sfx.tick(); render(); return; } // first tap: select
+  picked = null;
+  mode = null;
+  dispatch(clean); // second tap (or a glowing spot): build
 }
+
+const sameAction = (a, b) => a && b && a.type === b.type && a.corner === b.corner && a.edge === b.edge;
 
 const canTradeNow = () => S.phase === 'play' && !S.pending && !S.trade && !cover &&
   !freeRoadsOf(S, viewer) && (isRush(S) || (S.current === viewer && S.turn.rolled));
@@ -367,6 +378,14 @@ document.addEventListener('click', (e) => {
     case 'tt':
       adjustDraft(d.side, d.res, n(d.delta), countering ?? viewer);
       return render();
+    case 'lot': {
+      // Round up to the next whole lot for the bank (e.g. 4 at 4:1).
+      const ratio = tradeRatio(S, viewer, d.res);
+      const n = draft.give[d.res] ?? 0;
+      draft.give[d.res] = n + ratio - (n % ratio);
+      draft.get[d.res] = 0;
+      return render();
+    }
     case 'counter': {
       // Start a counter-offer: the open deal flipped round, ready to adjust.
       const t = S.trade;
@@ -425,9 +444,9 @@ function toast(text) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 // A small, quiet message at the side of the board.
-function note(text) {
+function note(text, html = null) {
   const t = $('note');
-  t.textContent = text;
+  if (html) t.innerHTML = html; else t.textContent = text;
   t.classList.add('show');
   clearTimeout(noteTimer);
   noteTimer = setTimeout(() => t.classList.remove('show'), 3200);
@@ -473,7 +492,9 @@ function showEvents(prev, next) {
       banner(`✨ ${esc(line)}`);
     } else if (/takes the (Longest Route|Strongest Army)/.test(line)) {
       banner(`🏅 ${esc(line)}`, 'award');
-    } else if (/stole a card|traded with|discarded/.test(line)) {
+    } else if (/traded with|with the bank/.test(line)) {
+      tradeNote(prev, next);
+    } else if (/stole a card|discarded/.test(line)) {
       note(line);
     } else if (/built a (road|settlement|city)/.test(line)) {
       sfx.build();
@@ -485,6 +506,22 @@ function showEvents(prev, next) {
     !next.turn.rolled && (prev.current !== next.current || prev.phase !== 'play');
   if (myTurnStarts) { sfx.turn(); if (humanCount() === 1) banner('Your turn!', 'turn'); }
   if (handSize(next.players[viewer].hand) > DISCARD_LIMIT && handSize(prev.players[viewer].hand) <= DISCARD_LIMIT) sfx.warn();
+}
+
+// "Bot 1 ⇄ Bot 2: [2 wood] for [1 ore]" for trades you weren't part of.
+function tradeNote(prev, next) {
+  const changed = next.players.filter((p) => RESOURCES.some((r) => p.hand[r] !== prev.players[p.id].hand[r]));
+  if (!changed.length || changed.some((p) => p.id === viewer)) return;
+  const who = changed[0];
+  const gave = {}, got = {};
+  for (const r of RESOURCES) {
+    const d = who.hand[r] - prev.players[who.id].hand[r];
+    if (d < 0) gave[r] = -d;
+    if (d > 0) got[r] = d;
+  }
+  const other = changed[1];
+  const name = (p) => `<span class="dot" style="--c:${PLAYER_COLOURS[p.id]}"></span>${esc(p.name)}`;
+  note('', `${name(who)} ⇄ ${other ? name(other) : '🏦 Bank'}: ${chips(gave)} for ${chips(got)}`);
 }
 
 // Two big dice tumble in the middle of the board.
@@ -580,6 +617,11 @@ const chips = (cards) => Object.entries(cards).filter(([, n]) => n > 0)
   .map(([r, n]) => `<span class="mini" style="--rc:${RESOURCE_COLOUR[r]}">${icon(r)}<b>${n}</b></span>`).join('') || '—';
 const costDots = (cost) => `<span class="cost">${Object.entries(cost)
   .flatMap(([r, n]) => Array(n).fill(`<i style="background:${RESOURCE_COLOUR[r]}"></i>`)).join('')}</span>`;
+const BUILD_LABEL = {
+  buildRoad: 'a road (wood + clay)',
+  buildSettlement: 'a house (wood + clay + sheep + wheat)',
+  buildCity: 'a city (2 wheat + 3 ore)',
+};
 const ROAD_ICON = '<svg class="si" viewBox="0 0 12 12"><path d="M3 11 L5 1 M9 11 L7 1" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M6 2v1.5M6 5.5V7M6 9.5V11" stroke="currentColor" stroke-width="1"/></svg>';
 const SWORD_ICON = '<svg class="si" viewBox="0 0 12 12"><path d="M10.5 1.5 4 8M2.5 6.5l3 3M2 10l1.5-1.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>';
 
@@ -592,6 +634,7 @@ function render() {
   renderPieces($('board'), S, { targets, hot });
   renderPlayers();
   renderStatus();
+  renderBank();
   renderDock(legal);
   renderSheet(legal);
   renderCover();
@@ -603,7 +646,11 @@ function boardTargets(legal) {
   if (S.pending?.type === 'moveBandit') return legal.filter((a) => a.type === 'moveBandit');
   if (freeRoadsOf(S, viewer) > 0) return legal.filter((a) => a.type === 'buildRoad');
   const type = { road: 'buildRoad', settlement: 'buildSettlement', city: 'buildCity' }[mode];
-  return type ? legal.filter((a) => a.type === type) : [];
+  if (type) return legal.filter((a) => a.type === type);
+  // Tap-to-build: any legal build is tappable; the picked one glows.
+  return legal.filter((a) => ['buildRoad', 'buildSettlement', 'buildCity'].includes(a.type))
+    .sort((a, b) => (a.edge ? 0 : 1) - (b.edge ? 0 : 1)) // corners on top of roads
+    .map((a) => (sameAction(a, picked) ? { ...a, picked: true } : { ...a, ghost: true }));
 }
 
 function renderPlayers() {
@@ -642,6 +689,7 @@ function statusText() {
     if (S.trade?.from === me) return 'Waiting for answers to your offer…';
     if (freeRoadsOf(S, me)) return `Place ${freeRoadsOf(S, me)} free road${freeRoadsOf(S, me) > 1 ? 's' : ''}`;
     if (mode) return `Tap a glowing spot for your ${mode}`;
+    if (picked) return `Tap again to build ${BUILD_LABEL[picked.type]}`;
     return '⚡ Rush: build and trade any time';
   }
   if (S.trade) return S.trade.from === me ? 'Waiting for answers (timer paused)' : `${S.players[S.trade.from].name} wants to trade`;
@@ -649,7 +697,8 @@ function statusText() {
   if (S.turn.freeRoads) return `Place ${S.turn.freeRoads} free road${S.turn.freeRoads > 1 ? 's' : ''}`;
   if (!S.turn.rolled) return 'Your turn: roll the dice';
   if (mode) return `Tap a glowing spot for your ${mode}`;
-  return 'Build, trade or end your turn';
+  if (picked) return `Tap again to build ${BUILD_LABEL[picked.type]}`;
+  return 'Build, trade or end your turn (tap the board to build)';
 }
 
 function renderStatus() {
@@ -658,6 +707,19 @@ function renderStatus() {
   const d = S.turn.dice;
   $('dice').innerHTML = d && S.phase === 'play' ? `${die(d[0])}${die(d[1])}<span class="dsum">${d[0] + d[1]}</span>` : '';
   $('status').style.setProperty('--c', isRush(S) ? '#f5b83d' : PLAYER_COLOURS[S.current]);
+}
+
+// What's left in the bank: a small stack per resource that shrinks and
+// turns red when running low (19 of each to start), plus the bonus deck.
+function renderBank() {
+  const low = (n) => (n <= 3 ? 'low' : n <= 7 ? 'mid' : '');
+  $('bankbar').innerHTML = RESOURCES.map((r) => {
+    const n = S.bank[r];
+    const layers = Math.ceil(n / 5); // one card layer per 5 cards
+    return `<div class="bk ${low(n)}" style="--rc:${RESOURCE_COLOUR[r]}" title="${NAMES[r]} left in the bank">
+      <span class="bk-stack">${Array.from({ length: Math.max(layers, 1) }, (_, i) =>
+        `<i style="--i:${i}" class="${n ? '' : 'gone'}"></i>`).join('')}</span><b>${n}</b></div>`;
+  }).join('') + `<div class="bk deck" title="Bonus cards left"><span class="bk-stack"><i style="--i:0"></i></span><b>${S.deck.length}</b></div>`;
 }
 
 function renderDock(legal) {
@@ -677,13 +739,15 @@ function renderDock(legal) {
       <b class="count">${n}</b><small>${NAMES[r]}</small></button>`;
   }).join('');
   const has = (t) => legal.some((a) => a.type === t);
+  // Pieces left of each kind (15 roads, 5 houses, 4 cities each).
+  const left = (n) => ` <span class="left ${n ? '' : 'none'}">${n}</span>`;
   const btn = (act, label, enabled, extra = '', cls = '') =>
     `<button data-act="${act}" class="act ${cls} ${mode === act || userSheet === act ? 'on' : ''}" ${enabled ? '' : 'disabled'}>${label}${extra}</button>`;
   const free = freeRoadsOf(S, viewer) > 0;
   $('actions').innerHTML = [
-    btn('road', 'Road', has('buildRoad') && !free, costDots(COSTS.road)),
-    btn('settlement', 'House', has('buildSettlement'), costDots(COSTS.settlement)),
-    btn('city', 'City', has('buildCity'), costDots(COSTS.city)),
+    btn('road', `Road${left(pl.pieces.roads)}`, has('buildRoad') && !free, costDots(COSTS.road)),
+    btn('settlement', `House${left(pl.pieces.settlements)}`, has('buildSettlement'), costDots(COSTS.settlement)),
+    btn('city', `City${left(pl.pieces.cities)}`, has('buildCity'), costDots(COSTS.city)),
     btn('buy', 'Card', has('buyCard'), costDots(COSTS.card)),
     btn('trade', 'Trade', canTradeNow()),
     btn('cards', `Cards <span class="count">${pl.cards.length}</span>`, !hidden && pl.cards.length > 0),
@@ -742,7 +806,8 @@ function stepper(r, value, max) {
 function stealSheet() {
   return `<h3>Steal a card from…</h3><div class="list">${S.pending.victims.map((v) => `
     <button class="row-btn" data-act="steal" data-victim="${v}" style="--c:${PLAYER_COLOURS[v]}">
-      <span class="dot"></span>${esc(S.players[v].name)}<small>${handSize(S.players[v].hand)} cards</small></button>`).join('')}</div>`;
+      <span class="dot"></span>${esc(S.players[v].name)}
+      <small>${points(S, v, { includeHidden: false })} pts · ${handSize(S.players[v].hand)} cards</small></button>`).join('')}</div>`;
 }
 
 // A bot offers a trade; only humans who could accept are asked.
@@ -758,7 +823,7 @@ function offerSheet() {
       : `<span class="answer ${r}">${r === 'accept' ? 'Accepted' : 'Declined'}</span>`;
     return `<div class="resp" style="--c:${PLAYER_COLOURS[id]}"><span class="dot"></span>${esc(S.players[id].name)}<span class="grow"></span>${answer}</div>`;
   }).join('');
-  return `<h3>${esc(from.name)} offers a trade</h3>
+  return `<h3><span class="dot big" style="--c:${PLAYER_COLOURS[from.id]}"></span>${esc(from.name)} offers a trade</h3>
     <div class="deal"><div><small>You get</small>${chips(t.give)}</div><div class="arrow">⇄</div><div><small>You give</small>${chips(t.get)}</div></div>
     ${rows}`;
 }
@@ -795,10 +860,14 @@ function myOfferSheet() {
 function tradeTile(side, r, who, showRatio) {
   const n = draft[side][r] ?? 0;
   const full = side === 'give' && n >= S.players[who].hand[r];
+  // Under each "give" tile: a 4:1 / 3:1 / 2:1 button that adds a whole bank lot.
+  const ratio = tradeRatio(S, who, r);
+  const lot = showRatio && side === 'give'
+    ? `<button class="tlot" data-act="lot" data-res="${r}" ${n + ratio - (n % ratio) <= S.players[who].hand[r] ? '' : 'disabled'}>${ratio}:1</button>` : '';
   return `<div class="ttile ${n ? 'on' : ''}" style="--rc:${RESOURCE_COLOUR[r]}">
-    <button class="tadd" data-act="tt" data-side="${side}" data-res="${r}" data-delta="1" ${full ? 'disabled' : ''}>
-      ${icon(r)}${showRatio && side === 'give' ? `<small>${tradeRatio(S, who, r)}:1</small>` : ''}</button>
+    <button class="tadd" data-act="tt" data-side="${side}" data-res="${r}" data-delta="1" ${full ? 'disabled' : ''}>${icon(r)}</button>
     ${n ? `<b>${n}</b><button class="tminus" data-act="tt" data-side="${side}" data-res="${r}" data-delta="-1" aria-label="Remove one">−</button>` : ''}
+    ${lot}
   </div>`;
 }
 
