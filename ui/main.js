@@ -26,6 +26,7 @@ document.getElementById('fit').addEventListener('click', () => panZoom.fit());
 
 show(new URLSearchParams(location.search).get('seed') || randomSeed());
 
-if ('serviceWorker' in navigator) {
+// Offline cache. Skipped on the local test server so edits show up at once.
+if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

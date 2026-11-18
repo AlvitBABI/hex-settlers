@@ -1,11 +1,11 @@
 // Our own names for the five resources. "desert" produces nothing.
-export const RESOURCES = ['wood', 'clay', 'wool', 'wheat', 'stone'];
+export const RESOURCES = ['wood', 'clay', 'sheep', 'wheat', 'ore'];
 
 export const BOARD_RADIUS = 2; // 1 + 6 + 12 = 19 hexes
 
 // How many of each tile go on the board (19 in total).
 export const TILE_COUNTS = {
-  wood: 4, clay: 3, wool: 4, wheat: 4, stone: 3, desert: 1,
+  wood: 4, clay: 3, sheep: 4, wheat: 4, ore: 3, desert: 1,
 };
 
 // One token per non-desert tile. No 7: rolling a 7 does something else.

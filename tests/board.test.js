@@ -79,7 +79,7 @@ test('9 ports: 4 at 3:1 and one 2:1 per resource, on coastal edges, none sharing
     const b = boardFor(seed);
     assert.equal(b.ports.length, 9);
     const types = b.ports.map((p) => p.type).sort();
-    assert.deepEqual(types, ['any', 'any', 'any', 'any', 'clay', 'stone', 'wheat', 'wood', 'wool']);
+    assert.deepEqual(types, ['any', 'any', 'any', 'any', 'clay', 'ore', 'sheep', 'wheat', 'wood']);
     for (const p of b.ports) {
       assert.equal(p.ratio, p.type === 'any' ? 3 : 2);
       assert.equal(b.edges[p.edge].hexes.length, 1, 'port must be on the coast');
