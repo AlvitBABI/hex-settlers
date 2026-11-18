@@ -131,3 +131,24 @@ test('a bot answers a bad offer with a counter-offer it would accept', () => {
   s = act(s, a);
   assert.equal(s.trade.responses[1], 'counter');
 });
+
+test('an offering bot prefers a human who accepts, unless they are far ahead', () => {
+  let s = act(afterSetup(), { type: 'roll', player: 0 });
+  s.pending = null;
+  s.current = 1; // bot 1's turn
+  s.players[2].kind = 'human';
+  emptyHands(s);
+  give(s, 1, { ore: 1 });
+  give(s, 2, { wheat: 1 });
+  give(s, 3, { wheat: 1 });
+  s = act(s, { type: 'offerTrade', player: 1, give: { ore: 1 }, get: { wheat: 1 } });
+  s = act(s, { type: 'respondTrade', player: 0, accept: false });
+  s = act(s, { type: 'respondTrade', player: 2, accept: true });
+  s = act(s, { type: 'respondTrade', player: 3, accept: true });
+  assert.deepEqual(chooseAction(s, 1), { type: 'confirmTrade', player: 1, with: 2 }, 'picks the human');
+  // Same, but the human is 3+ points ahead of the bot: the bot trades with the other bot.
+  const ahead = structuredClone(s);
+  ahead.largestArmy = { player: 2, count: 3 };
+  ahead.longestRoad = { player: 2, length: 5 };
+  assert.deepEqual(chooseAction(ahead, 1), { type: 'confirmTrade', player: 1, with: 3 });
+});

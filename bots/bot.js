@@ -27,6 +27,7 @@ const WEIGHT = { wood: 1, clay: 1, sheep: 0.85, wheat: 1.1, ore: 1.1, desert: 0 
 // How much better than even a deal must be, per seat: bots differ a little.
 const PICKINESS = [0.2, 0.45, 0.3, 0.6];
 const LEADER_POINTS = 8;  // bots won't trade with someone this close to winning
+const FAR_AHEAD = 3;      // ...or with a human this many points ahead of them
 
 const hexMap = (s) => new Map(s.board.hexes.map((h) => [h.id, h]));
 
@@ -262,7 +263,14 @@ export function chooseAction(s, p) {
     const answers = Object.entries(t.responses);
     if (answers.some(([, r]) => r === null)) return null; // still waiting for answers
     const weakestFirst = (a, b) => points(s, a, { includeHidden: false }) - points(s, b, { includeHidden: false });
-    const yes = answers.filter(([, r]) => r === 'accept').map(([id]) => Number(id)).sort(weakestFirst);
+    // Prefer a human who said yes (it's more fun to trade with people),
+    // unless they are far ahead: then pick a bot, or nobody.
+    const vis = (id) => points(s, id, { includeHidden: false });
+    const farAhead = (id) => vis(id) >= LEADER_POINTS || vis(id) >= vis(p) + FAR_AHEAD;
+    const yes = answers.filter(([, r]) => r === 'accept').map(([id]) => Number(id))
+      .filter((id) => !(s.players[id].kind === 'human' && farAhead(id))).sort(weakestFirst);
+    const human = yes.find((id) => s.players[id].kind === 'human');
+    if (human !== undefined) return { type: 'confirmTrade', player: p, with: human };
     if (yes.length) return { type: 'confirmTrade', player: p, with: yes[0] };
     // Take the best counter-offer, if it's good enough.
     let best = null, bestScore = pickiness(p);
