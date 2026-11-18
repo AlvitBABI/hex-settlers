@@ -20,3 +20,23 @@ export const PORT_TYPES = ['any', 'any', 'any', 'any', ...RESOURCES];
 // Gaps (in coastal edges) between one port and the next, going round.
 // 3+3+4 three times = 30, the number of coastal edges on a radius-2 board.
 export const PORT_GAPS = [3, 3, 4, 3, 3, 4, 3, 3, 4];
+
+// What each thing costs to build or buy.
+export const COSTS = {
+  road: { wood: 1, clay: 1 },
+  settlement: { wood: 1, clay: 1, sheep: 1, wheat: 1 },
+  city: { wheat: 2, ore: 3 },
+  card: { sheep: 1, wheat: 1, ore: 1 },
+};
+
+// Pieces each player starts with.
+export const PIECES = { roads: 15, settlements: 5, cities: 4 };
+
+export const BANK_SIZE = 19; // of each resource
+export const WIN_POINTS = 10;
+export const DISCARD_LIMIT = 7; // more than this when a 7 is rolled: discard half
+export const LONGEST_ROUTE_MIN = 5; // roads needed for the Longest Route bonus
+export const STRONGEST_ARMY_MIN = 3; // soldiers needed for the Strongest Army bonus
+
+// Bonus card deck (25 cards).
+export const CARD_COUNTS = { soldier: 14, point: 5, roads: 2, harvest: 2, monopoly: 2 };
