@@ -40,3 +40,15 @@ export const STRONGEST_ARMY_MIN = 3; // soldiers needed for the Strongest Army b
 
 // Bonus card deck (25 cards).
 export const CARD_COUNTS = { soldier: 14, point: 5, roads: 2, harvest: 2, monopoly: 2 };
+
+// "Alphabetical spiral" order of number tokens (A to R), laid from an outer
+// corner round and inward, skipping the desert.
+export const SPIRAL_TOKENS = [5, 2, 6, 3, 8, 10, 9, 12, 11, 4, 8, 10, 9, 4, 5, 6, 3, 11];
+
+// Game options and their defaults.
+export const DEFAULT_OPTIONS = {
+  numbers: 'spiral', // 'spiral' | 'random' (random: 6 and 8 never touch)
+  dice: 'random',    // 'random' | 'balanced' (a shuffled deck of all 36 rolls)
+  mode: 'classic',   // 'classic' | 'rush'
+};
+export const BALANCED_RESHUFFLE_AT = 5; // reshuffle the dice deck when this few rolls are left

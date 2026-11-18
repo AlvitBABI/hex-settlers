@@ -17,6 +17,15 @@ const seats = [
   { kind: 'bot', name: 'Player 4' },
 ];
 let timer = 60;
+const options = { numbers: 'spiral', dice: 'random' };
+
+// Two-or-more-choice settings shown as segmented buttons.
+const SETTINGS = [
+  { key: 'numbers', title: 'Board numbers', choices: [['spiral', 'Spiral'], ['random', 'Random']],
+    hint: { spiral: 'Standard: numbers laid A to R in a spiral from a random corner.', random: 'Fully random, but 6 and 8 never touch.' } },
+  { key: 'dice', title: 'Dice', choices: [['random', 'Random'], ['balanced', 'Balanced']],
+    hint: { random: 'Every roll is a fair, independent throw.', balanced: 'Rolls come from a shuffled deck of all 36 results, so numbers appear close to their odds.' } },
+];
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -61,6 +70,10 @@ export function showMenu({ saved, onStart, onContinue }) {
                 </div>`}
             </div>`).join('')}
         </div>
+        ${SETTINGS.map((set) => `
+          <h2>${set.title}</h2>
+          <div class="seg">${set.choices.map(([v, label]) => `<button data-opt="${set.key}" data-val="${v}" class="${options[set.key] === v ? 'on' : ''}">${label}</button>`).join('')}</div>
+          <p class="hint">${set.hint[options[set.key]]}</p>`).join('')}
         <h2>Turn timer</h2>
         <div class="seg">
           ${TIMERS.map((t) => `<button data-timer="${t.seconds}" class="${timer === t.seconds ? 'on' : ''}">${t.label}</button>`).join('')}
@@ -78,8 +91,9 @@ export function showMenu({ saved, onStart, onContinue }) {
     if (!b) return;
     if (b.dataset.seat) seats[b.dataset.seat].kind = b.dataset.kind;
     if (b.dataset.timer) timer = Number(b.dataset.timer);
+    if (b.dataset.opt) options[b.dataset.opt] = b.dataset.val;
     if (b.dataset.menu === 'start') {
-      onStart({ players: playersFromSeats(), turnTime: timer, seed: Math.random().toString(36).slice(2, 8) });
+      onStart({ players: playersFromSeats(), turnTime: timer, options: { ...options }, seed: Math.random().toString(36).slice(2, 8) });
       return;
     }
     if (b.dataset.menu === 'continue') { onContinue(); return; }

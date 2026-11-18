@@ -1,6 +1,6 @@
 // Starting placement, dice, collecting resources, building, ending a turn.
-import { COSTS, RESOURCES } from './constants.js';
-import { nextInt } from './rng.js';
+import { COSTS, RESOURCES, BALANCED_RESHUFFLE_AT } from './constants.js';
+import { nextInt, shuffle } from './rng.js';
 import { CORNER_EDGES, CORNER_NEIGHBOURS, EDGE_CORNERS, CORNER_HEXES, HEX_CORNERS } from './topology.js';
 import { startSeven } from './bandit.js';
 import { emptyHand, hasCards, newTurn, log, nameOf, mainTurnError } from './helpers.js';
@@ -69,6 +69,29 @@ export function produce(state, total) {
   }
 }
 
+// ---- Dice ----
+
+// All 36 ways two dice can land.
+const ALL_ROLLS = Array.from({ length: 36 }, (_, i) => [Math.floor(i / 6) + 1, (i % 6) + 1]);
+
+// Random dice: two independent throws. Balanced dice: draw from a shuffled
+// deck of all 36 combinations, reshuffled when only a few are left, so
+// numbers come up close to their true odds over a game.
+export function throwDice(s) {
+  if (s.options?.dice === 'balanced') {
+    if (!s.diceDeck || s.diceDeck.length <= BALANCED_RESHUFFLE_AT) {
+      const deck = shuffle(s.rng, ALL_ROLLS);
+      s.rng = deck.rng;
+      s.diceDeck = deck.result;
+    }
+    return s.diceDeck.pop();
+  }
+  const a = nextInt(s.rng, 6);
+  const b = nextInt(a.rng, 6);
+  s.rng = b.rng;
+  return [a.value + 1, b.value + 1];
+}
+
 // ---- Actions ----
 
 function placeSettlement(s, { player, corner }) {
@@ -114,10 +137,7 @@ function roll(s, { player }) {
   const err = mainTurnError(s, player);
   if (err) return err;
   if (s.turn.rolled) return 'You already rolled';
-  const a = nextInt(s.rng, 6);
-  const b = nextInt(a.rng, 6);
-  s.rng = b.rng;
-  const dice = [a.value + 1, b.value + 1];
+  const dice = throwDice(s);
   const total = dice[0] + dice[1];
   s.turn.rolled = true;
   s.turn.dice = dice;

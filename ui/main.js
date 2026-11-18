@@ -14,7 +14,7 @@ function openMenu() {
   showMenu({
     saved: saved && saved.state?.phase !== 'over' ? saved : null,
     onStart(config) {
-      const state = createGame({ seed: config.seed, players: config.players });
+      const state = createGame({ seed: config.seed, players: config.players, options: config.options });
       openGame(config, state);
     },
     onContinue() { openGame(saved.config, saved.state); },

@@ -4,7 +4,9 @@ import { transfer } from '../engine/knowledge.js';
 
 export function newGame(n = 4, seed = 'test') {
   const players = Array.from({ length: n }, (_, i) => ({ name: `P${i + 1}`, kind: 'bot' }));
-  return createGame({ seed, players });
+  // Random numbers keep these test games (and their dice) the same as when
+  // the tests were written; spiral boards have their own tests.
+  return createGame({ seed, players, options: { numbers: 'random' } });
 }
 
 // Apply an action and fail loudly if it's illegal.

@@ -6,7 +6,7 @@
 // Each rules topic lives in its own module with `handlers` and `legal`.
 import { createRng, shuffle } from './rng.js';
 import { generateBoard } from './board.js';
-import { RESOURCES, BANK_SIZE, PIECES, CARD_COUNTS } from './constants.js';
+import { RESOURCES, BANK_SIZE, PIECES, CARD_COUNTS, DEFAULT_OPTIONS } from './constants.js';
 import { clone, emptyHand, newTurn } from './helpers.js';
 import { newKnowledge } from './knowledge.js';
 import * as turn from './turn.js';
@@ -20,20 +20,25 @@ const HANDLERS = Object.assign({}, ...MODULES.map((m) => m.handlers));
 
 export const PLAYER_COUNT = { min: 2, max: 4 };
 
-// config: { seed, players: [{ name, kind: 'human' | 'bot' }, ...] }
-export function createGame({ seed, players }) {
+// config: { seed, players: [{ name, kind: 'human' | 'bot' }, ...], options }
+// options: see DEFAULT_OPTIONS in constants.js (numbers, dice, mode).
+export function createGame({ seed, players, options = {} }) {
+  options = { ...DEFAULT_OPTIONS, ...options };
   if (!Array.isArray(players) || players.length < PLAYER_COUNT.min || players.length > PLAYER_COUNT.max) {
     throw new Error(`A game needs ${PLAYER_COUNT.min} to ${PLAYER_COUNT.max} players`);
   }
   let rng = createRng(seed);
-  const g = generateBoard(rng);
+  const g = generateBoard(rng, { numbers: options.numbers });
   rng = g.rng;
   const deck = shuffle(rng, Object.entries(CARD_COUNTS).flatMap(([t, n]) => Array(n).fill(t)));
   rng = deck.rng;
   const ids = players.map((_, i) => i);
   return {
     seed: String(seed),
+    options,
+    mode: options.mode,
     rng,
+    diceDeck: null, // used by balanced dice
     board: g.board,
     players: players.map((p, i) => ({
       id: i, name: p.name, kind: p.kind,

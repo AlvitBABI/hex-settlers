@@ -1,11 +1,11 @@
 // Random board generation. Pure: no DOM, no Math.random.
-import { shuffle } from './rng.js';
+import { shuffle, nextInt } from './rng.js';
 import {
-  hexId, parseHexId, hexesInRadius, neighbour,
+  hexId, parseHexId, hexesInRadius, neighbour, DIRECTIONS,
   edgeId, cornerId, edgeCorners,
 } from './hex.js';
 import {
-  BOARD_RADIUS, TILE_COUNTS, NUMBER_TOKENS, RED_NUMBERS, PORT_TYPES, PORT_GAPS,
+  BOARD_RADIUS, TILE_COUNTS, NUMBER_TOKENS, RED_NUMBERS, PORT_TYPES, PORT_GAPS, SPIRAL_TOKENS,
 } from './constants.js';
 
 // Build the empty map: hexes, plus every corner and edge that touches one.
@@ -59,10 +59,29 @@ export function hasTouchingRedNumbers(hexes) {
     }));
 }
 
-// generateBoard(rng) -> { board, rng }
+// Hexes in spiral order: the outer ring from a corner, then inward.
+// `turn` (0-5) picks which corner the spiral starts from.
+export function spiralOrder(radius, turn = 0) {
+  const out = [];
+  for (let k = radius; k > 0; k--) {
+    const [sq, sr] = DIRECTIONS[(4 + turn) % 6];
+    let q = sq * k, r = sr * k;
+    for (let i = 0; i < 6; i++) {
+      for (let j = 0; j < k; j++) {
+        out.push(hexId(q, r));
+        ({ q, r } = neighbour(q, r, (i + turn) % 6));
+      }
+    }
+  }
+  out.push(hexId(0, 0));
+  return out;
+}
+
+// generateBoard(rng, { numbers }) -> { board, rng }
 // Takes the random-number state and returns the next one, so the caller
 // (later: the game state) keeps control of all randomness.
-export function generateBoard(rng) {
+// numbers: 'random' (default here; 6 and 8 never touch) or 'spiral'.
+export function generateBoard(rng, { numbers = 'random' } = {}) {
   const layout = buildLayout(BOARD_RADIUS);
 
   // 1. Shuffle the tiles onto the hexes.
@@ -71,14 +90,23 @@ export function generateBoard(rng) {
   rng = s.rng;
   const hexes = layout.hexes.map((h, i) => ({ ...h, resource: s.result[i], number: null }));
 
-  // 2. Shuffle number tokens onto non-desert hexes until no 6/8 touch.
-  const land = hexes.filter((h) => h.resource !== 'desert');
-  for (let attempt = 0; ; attempt++) {
-    if (attempt === 10000) throw new Error('Could not place number tokens');
-    s = shuffle(rng, NUMBER_TOKENS);
-    rng = s.rng;
-    land.forEach((h, i) => { h.number = s.result[i]; });
-    if (!hasTouchingRedNumbers(hexes)) break;
+  if (numbers === 'spiral') {
+    // 2a. Lay tokens A-R in a spiral from a random corner, skipping the desert.
+    const start = nextInt(rng, 6);
+    rng = start.rng;
+    const byId = new Map(hexes.map((h) => [h.id, h]));
+    const land = spiralOrder(BOARD_RADIUS, start.value).map((id) => byId.get(id)).filter((h) => h.resource !== 'desert');
+    land.forEach((h, i) => { h.number = SPIRAL_TOKENS[i]; });
+  } else {
+    // 2b. Shuffle number tokens onto non-desert hexes until no 6/8 touch.
+    const land = hexes.filter((h) => h.resource !== 'desert');
+    for (let attempt = 0; ; attempt++) {
+      if (attempt === 10000) throw new Error('Could not place number tokens');
+      s = shuffle(rng, NUMBER_TOKENS);
+      rng = s.rng;
+      land.forEach((h, i) => { h.number = s.result[i]; });
+      if (!hasTouchingRedNumbers(hexes)) break;
+    }
   }
 
   // 3. Ports sit at fixed spots round the coast; their types are shuffled.
