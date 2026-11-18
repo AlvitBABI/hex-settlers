@@ -39,23 +39,37 @@ test('7: more than 7 cards means discarding half (rounded down)', () => {
   assert.deepEqual(s.pending, { type: 'moveBandit', player: 0 });
 });
 
-test('bandit must move to a new hex, then steal one card from a neighbour', () => {
+test('bandit must move to a new hex; with one neighbour it robs them at once', () => {
   let s = rolledSeven();
   startSeven(s);
   assert.equal(applyAction(s, { type: 'moveBandit', player: 0, hex: s.bandit }).ok, false);
-  // Find a hex next to player 1 but not player 0.
-  const hex = Object.keys(HEX_CORNERS).find((h) =>
+  // Find a hex next to player 1 only.
+  const hex = Object.keys(HEX_CORNERS).find((h) => h !== s.bandit &&
     HEX_CORNERS[h].some((c) => s.buildings[c]?.player === 1) &&
-    !HEX_CORNERS[h].some((c) => s.buildings[c]?.player === 0) && h !== s.bandit);
+    !HEX_CORNERS[h].some((c) => s.buildings[c] && s.buildings[c].player !== 1));
   give(s, 1, { clay: 2 });
   s = act(s, { type: 'moveBandit', player: 0, hex });
   assert.equal(s.bandit, hex);
-  assert.deepEqual(victimsAt(s, hex, 0), [1]);
-  assert.equal(s.pending.type, 'steal');
-  assert.equal(applyAction(s, { type: 'steal', player: 0, victim: 2 }).ok, false);
-  s = act(s, { type: 'steal', player: 0, victim: 1 });
+  assert.equal(s.pending, null, 'no need to pick the only victim');
   assert.equal(s.players[0].hand.clay, 1);
   assert.equal(s.players[1].hand.clay, 1);
+});
+
+test('with two neighbours to rob, the mover picks one', () => {
+  let s = rolledSeven();
+  startSeven(s);
+  // Put players 1 and 2 on the same hex.
+  const hex = Object.keys(HEX_CORNERS).find((h) => h !== s.bandit && !HEX_CORNERS[h].some((c) => s.buildings[c]));
+  const [a, , c] = HEX_CORNERS[hex];
+  s.buildings[a] = { player: 1, type: 'settlement' };
+  s.buildings[c] = { player: 2, type: 'settlement' };
+  give(s, 1, { clay: 1 });
+  give(s, 2, { ore: 1 });
+  s = act(s, { type: 'moveBandit', player: 0, hex });
+  assert.deepEqual(s.pending, { type: 'steal', victims: [1, 2], player: 0 });
+  assert.equal(applyAction(s, { type: 'steal', player: 0, victim: 3 }).ok, false);
+  s = act(s, { type: 'steal', player: 0, victim: 2 });
+  assert.equal(s.players[0].hand.ore, 1);
   assert.equal(s.pending, null);
 });
 

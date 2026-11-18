@@ -33,7 +33,7 @@ test('a steal is only seen by the thief and the victim', () => {
     !HEX_CORNERS[h].some((c) => s.buildings[c]?.player === 0));
   if (!hex) return;
   s = act(s, { type: 'moveBandit', player: 0, hex });
-  s = act(s, { type: 'steal', player: 0, victim: 1 });
+  if (s.pending?.type === 'steal') s = act(s, { type: 'steal', player: 0, victim: 1 }); // else robbed automatically
   // Thief and victim know exactly.
   assert.deepEqual(known(s, 1, 0).known, s.players[0].hand);
   assert.deepEqual(known(s, 0, 1).known, s.players[1].hand);

@@ -53,21 +53,31 @@ function moveBandit(s, { player, hex }) {
   s.bandit = hex;
   log(s, `${nameOf(s, player)} moved the bandit`);
   const victims = victimsAt(s, hex, player);
-  s.pending = victims.length ? { type: 'steal', victims, player } : null;
+  if (victims.length === 1) {
+    takeRandomCard(s, player, victims[0]); // only one choice: rob them straight away
+    s.pending = null;
+  } else {
+    s.pending = victims.length ? { type: 'steal', victims, player } : null;
+  }
 }
 
-function steal(s, { player, victim }) {
-  if (s.pending?.type !== 'steal') return 'Nothing to steal now';
-  if (player !== banditMover(s)) return 'It is not your steal';
-  if (!s.pending.victims.includes(victim)) return 'You cannot steal from that player';
+// Move one random card from victim to thief. Only the two of them see which.
+function takeRandomCard(s, player, victim) {
   const hand = s.players[victim].hand;
   const cards = RESOURCES.flatMap((r) => Array(hand[r]).fill(r));
   const pick = nextInt(s.rng, cards.length);
   s.rng = pick.rng;
-  // Only the thief and the victim see which card it was.
   transfer(s, victim, player, { [cards[pick.value]]: 1 }, [player, victim]);
-  s.pending = null;
   log(s, `${nameOf(s, player)} stole a card from ${nameOf(s, victim)}`);
+}
+
+// Pick who to rob when more than one player is next to the bandit.
+function steal(s, { player, victim }) {
+  if (s.pending?.type !== 'steal') return 'Nothing to steal now';
+  if (player !== banditMover(s)) return 'It is not your steal';
+  if (!s.pending.victims.includes(victim)) return 'You cannot steal from that player';
+  takeRandomCard(s, player, victim);
+  s.pending = null;
 }
 
 export const handlers = { discard, moveBandit, steal };
