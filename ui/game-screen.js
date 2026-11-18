@@ -7,7 +7,7 @@ import { tradeRatio, bankTradeError, dealWith } from '../engine/trade.js';
 import { CARD_NAMES } from '../engine/cards.js';
 import { COSTS, RESOURCES, DISCARD_LIMIT } from '../engine/constants.js';
 import { HEX_CORNERS } from '../engine/topology.js';
-import { handSize, hasCards } from '../engine/helpers.js';
+import { handSize, hasCards, isRush, freeRoadsOf, banditMover } from '../engine/helpers.js';
 import { chooseAction, timeoutAction } from '../bots/bot.js';
 import { renderBoard } from './board-view.js';
 import { renderPieces, ripple, toScreen } from './pieces-view.js';
@@ -49,6 +49,7 @@ let undoStack = [];
 let autoTimer = null;
 let deadline = null, deadlineKey = null, expiredKey = null, lastTick = Date.now(), lastBeep = null;
 let panZoom = null;
+let rushRollAt = null; // Rush: when the dice clock rolls next
 
 const isHuman = (p) => S.players[p].kind === 'human';
 const humanCount = () => S.players.filter((p) => p.kind === 'human').length;
@@ -62,7 +63,7 @@ export function startGame({ config: cfg, state, onExit: exit }) {
   onExit = exit;
   viewer = S.players.find((p) => p.kind === 'human').id;
   mode = null; userSheet = null; harvestPick = null; discardPick = {}; undoStack = []; backToTrade = false; countering = null;
-  deadline = null; deadlineKey = null; expiredKey = null;
+  deadline = null; deadlineKey = null; expiredKey = null; rushRollAt = null;
   resetDraft();
   updateViewer();
   if (humanCount() > 1) cover = { type: 'pass', player: viewer };
@@ -104,7 +105,7 @@ function undo() {
 function changed(prev, { save = true, quiet = false } = {}) {
   if (save) saveGame({ config, state: S });
   if (S.phase === 'over') clearSave();
-  const myTurn = S.phase === 'play' && S.current === viewer && !S.pending && !S.trade;
+  const myTurn = S.phase === 'play' && !S.pending && (isRush(S) ? S.trade?.from !== viewer : S.current === viewer && !S.trade);
   if (mode && !myTurn) mode = null;
   if (S.pending?.type !== 'discard') discardPick = {};
   if (countering !== null && S.trade?.responses[countering] !== null) countering = null;
@@ -116,6 +117,10 @@ function changed(prev, { save = true, quiet = false } = {}) {
   }
   updateViewer();
   updateDeadline();
+  if (isRush(S)) {
+    if (S.phase !== 'play') rushRollAt = null;
+    else if (!rushRollAt || (prev && newRoll(prev, S))) rushRollAt = Date.now() + rollEvery() * 1000;
+  }
   render();
   if (prev && !quiet) showEvents(prev, S);
   scheduleAuto(prev);
@@ -140,7 +145,9 @@ function updateViewer() {
 function nextAuto() {
   if (!S || S.phase === 'over') return null;
   const t = S.trade;
-  for (const p of waitingFor(S)) {
+  let ids = waitingFor(S);
+  if (isRush(S)) { const k = (nextAuto.turn = ((nextAuto.turn ?? 0) + 1) % ids.length); ids = [...ids.slice(k), ...ids.slice(0, k)]; }
+  for (const p of ids) {
     if (!isHuman(p)) {
       const a = chooseAction(S, p);
       if (a) return a;
@@ -159,6 +166,8 @@ function nextAuto() {
 const newRoll = (prev, next) => !!(next.turn.rolled && next.turn.dice &&
   (!prev.turn.rolled || prev.turn.number !== next.turn.number));
 
+const rollEvery = () => config.rollEvery ?? 12;
+
 const timedOut = () => expiredKey !== null && expiredKey === deadlineKey;
 
 function scheduleAuto(prev) {
@@ -170,7 +179,7 @@ function scheduleAuto(prev) {
   const banditMoved = prev && prev.bandit !== S.bandit;
   let delay = isHuman(next.player) ? (next.type === 'respondTrade' ? 300 : 150)
     : S.phase === 'setup' ? 500
-      : next.type === 'respondTrade' ? 350 : 850;
+      : next.type === 'respondTrade' ? 350 : isRush(S) ? 700 : 850;
   if (justRolled) delay = Math.max(delay, 1700);
   if (banditMoved) delay = Math.max(delay, 1200);
   autoTimer = setTimeout(() => {
@@ -201,7 +210,8 @@ function scheduleAuto(prev) {
 // ---- Turn timer (colonist-style: when it runs out, the game plays for you) ----
 
 function timerKey() {
-  if (!config.turnTime || S.phase === 'over') return null;
+  if (S.phase === 'over') return null;
+  if (!config.turnTime && !isRush(S)) return null;
   const humans = waitingFor(S).filter(isHuman);
   if (!humans.length) return null;
   const t = S.trade;
@@ -210,14 +220,16 @@ function timerKey() {
     return canAnswer ? `offer-${S.turn.number}-${S.turn.offers}` : null;
   }
   if (S.pending?.type === 'discard') return `discard-${S.turn.number}`;
+  if (S.pending && humans.includes(banditMover(S))) return `bandit-${S.turn.number}`;
+  if (isRush(S) && S.phase === 'play') return null; // Rush: no turns, the dice clock keeps time
   if (humans.includes(S.current)) return S.phase === 'setup' ? `setup-${S.setup.index}` : `turn-${S.turn.number}`;
   return null;
 }
 
 function secondsFor(key) {
-  const t = config.turnTime;
+  const t = config.turnTime || 30;
   if (key.startsWith('offer')) return Math.min(15, t);
-  if (key.startsWith('discard')) return Math.max(15, Math.round(t / 2));
+  if (key.startsWith('discard') || key.startsWith('bandit')) return Math.max(15, Math.round(t / 2));
   return t;
 }
 
@@ -239,8 +251,17 @@ function timerPaused() {
 function tick() {
   const now = Date.now();
   if (S && deadline && timerPaused()) deadline += now - lastTick;
+  if (S && rushRollAt && (S.pending || cover)) rushRollAt += now - lastTick; // paused during 7s
   lastTick = now;
   const el = $('timer');
+  if (S && isRush(S) && rushRollAt && !deadline) {
+    const left = Math.max(0, Math.ceil((rushRollAt - now) / 1000));
+    el.textContent = `🎲 ${left}s`;
+    el.classList.toggle('low', left <= 3);
+    el.classList.remove('paused');
+    if (now >= rushRollAt && S.phase === 'play' && !S.pending) rushRoll();
+    return;
+  }
   if (!S || !deadline) { el.textContent = ''; return; }
   const left = Math.max(0, Math.ceil((deadline - now) / 1000));
   el.textContent = `${left}s`;
@@ -257,6 +278,17 @@ function tick() {
 }
 setInterval(tick, 250);
 
+// Rush: the clock (or "Roll now") rolls the dice for everyone.
+function rushRoll() {
+  rushRollAt = Date.now() + rollEvery() * 1000;
+  const before = S;
+  const res = applyAction(S, { type: 'roll', player: viewer });
+  if (!res.ok) return;
+  undoStack = [];
+  S = res.state;
+  changed(before);
+}
+
 // ---- Taps ----
 
 function onTap(target) {
@@ -267,11 +299,12 @@ function onTap(target) {
   if (action) { mode = null; dispatch(action); }
 }
 
-const canTradeNow = () => S.phase === 'play' && S.current === viewer && !S.pending && !S.trade &&
-  S.turn.rolled && !S.turn.freeRoads && !cover;
+const canTradeNow = () => S.phase === 'play' && !S.pending && !S.trade && !cover &&
+  !freeRoadsOf(S, viewer) && (isRush(S) || (S.current === viewer && S.turn.rolled));
 
 const ACTIONS = {
   roll: () => dispatch({ type: 'roll', player: viewer }),
+  rollnow: () => rushRoll(),
   end: () => dispatch({ type: 'endTurn', player: viewer }),
   road: () => { mode = mode === 'road' ? null : 'road'; render(); },
   settlement: () => { mode = mode === 'settlement' ? null : 'settlement'; render(); },
@@ -447,7 +480,8 @@ function showEvents(prev, next) {
     }
   }
   if (next.phase === 'over' && prev.phase !== 'over') sfx.win();
-  const myTurnStarts = next.phase === 'play' && next.current === viewer && isHuman(viewer) &&
+  if (isRush(next) && next.phase === 'play' && prev.phase === 'setup') banner('⚡ Rush! Build and trade any time', 'turn');
+  const myTurnStarts = !isRush(next) && next.phase === 'play' && next.current === viewer && isHuman(viewer) &&
     !next.turn.rolled && (prev.current !== next.current || prev.phase !== 'play');
   if (myTurnStarts) { sfx.turn(); if (humanCount() === 1) banner('Your turn!', 'turn'); }
   if (handSize(next.players[viewer].hand) > DISCARD_LIMIT && handSize(prev.players[viewer].hand) <= DISCARD_LIMIT) sfx.warn();
@@ -567,7 +601,7 @@ function render() {
 function boardTargets(legal) {
   if (S.phase === 'setup') return legal;
   if (S.pending?.type === 'moveBandit') return legal.filter((a) => a.type === 'moveBandit');
-  if (S.turn.freeRoads > 0) return legal.filter((a) => a.type === 'buildRoad');
+  if (freeRoadsOf(S, viewer) > 0) return legal.filter((a) => a.type === 'buildRoad');
   const type = { road: 'buildRoad', settlement: 'buildSettlement', city: 'buildCity' }[mode];
   return type ? legal.filter((a) => a.type === type) : [];
 }
@@ -577,7 +611,7 @@ function renderPlayers() {
     const showAll = S.phase === 'over' || (p.id === viewer && !cover);
     const pts = points(S, p.id, { includeHidden: showAll });
     const cards = handSize(p.hand);
-    const cls = [p.id === S.current ? 'current' : '', p.id === viewer && humanCount() > 1 ? 'viewer' : ''].join(' ');
+    const cls = [p.id === (isRush(S) ? -1 : S.current) ? 'current' : '', p.id === viewer && humanCount() > 1 ? 'viewer' : ''].join(' ');
     const army = S.largestArmy.player === p.id ? 'hold' : '';
     const road = S.longestRoad.player === p.id ? 'hold' : '';
     return `<div class="chip ${cls}" data-chip="${p.id}" style="--c:${PLAYER_COLOURS[p.id]}">
@@ -601,8 +635,15 @@ function statusText() {
     return S.setup.step === 'settlement' ? 'Tap a glowing corner for your settlement' : 'Now tap a glowing edge for its road';
   }
   if (S.pending?.type === 'discard') return S.pending.counts[me] ? `Too many cards: discard ${S.pending.counts[me]}` : 'Waiting for discards…';
-  if (S.pending?.type === 'moveBandit') return S.current === me ? 'Move the bandit: tap a glowing tile' : `${cur.name} is moving the bandit…`;
-  if (S.pending?.type === 'steal') return S.current === me ? 'Pick who to steal from' : `${cur.name} is stealing…`;
+  const mover = S.players[banditMover(S)];
+  if (S.pending?.type === 'moveBandit') return mover.id === me ? 'Move the bandit: tap a glowing tile' : `${mover.name} is moving the bandit…`;
+  if (S.pending?.type === 'steal') return mover.id === me ? 'Pick who to steal from' : `${mover.name} is stealing…`;
+  if (isRush(S)) {
+    if (S.trade?.from === me) return 'Waiting for answers to your offer…';
+    if (freeRoadsOf(S, me)) return `Place ${freeRoadsOf(S, me)} free road${freeRoadsOf(S, me) > 1 ? 's' : ''}`;
+    if (mode) return `Tap a glowing spot for your ${mode}`;
+    return '⚡ Rush: build and trade any time';
+  }
   if (S.trade) return S.trade.from === me ? 'Waiting for answers (timer paused)' : `${S.players[S.trade.from].name} wants to trade`;
   if (S.current !== me) return `${cur.name}'s turn…`;
   if (S.turn.freeRoads) return `Place ${S.turn.freeRoads} free road${S.turn.freeRoads > 1 ? 's' : ''}`;
@@ -616,7 +657,7 @@ function renderStatus() {
   $('log').textContent = S.log.at(-1) ?? '';
   const d = S.turn.dice;
   $('dice').innerHTML = d && S.phase === 'play' ? `${die(d[0])}${die(d[1])}<span class="dsum">${d[0] + d[1]}</span>` : '';
-  $('status').style.setProperty('--c', PLAYER_COLOURS[S.current]);
+  $('status').style.setProperty('--c', isRush(S) ? '#f5b83d' : PLAYER_COLOURS[S.current]);
 }
 
 function renderDock(legal) {
@@ -638,7 +679,7 @@ function renderDock(legal) {
   const has = (t) => legal.some((a) => a.type === t);
   const btn = (act, label, enabled, extra = '', cls = '') =>
     `<button data-act="${act}" class="act ${cls} ${mode === act || userSheet === act ? 'on' : ''}" ${enabled ? '' : 'disabled'}>${label}${extra}</button>`;
-  const free = S.turn.freeRoads > 0;
+  const free = freeRoadsOf(S, viewer) > 0;
   $('actions').innerHTML = [
     btn('road', 'Road', has('buildRoad') && !free, costDots(COSTS.road)),
     btn('settlement', 'House', has('buildSettlement'), costDots(COSTS.settlement)),
@@ -646,7 +687,8 @@ function renderDock(legal) {
     btn('buy', 'Card', has('buyCard'), costDots(COSTS.card)),
     btn('trade', 'Trade', canTradeNow()),
     btn('cards', `Cards <span class="count">${pl.cards.length}</span>`, !hidden && pl.cards.length > 0),
-    has('roll') ? btn('roll', 'Roll', true, '', 'primary') : btn('end', 'End turn', has('endTurn'), '', 'primary'),
+    isRush(S) ? btn('rollnow', 'Roll now', S.phase === 'play' && !S.pending && !hidden, '', 'primary')
+      : has('roll') ? btn('roll', 'Roll', true, '', 'primary') : btn('end', 'End turn', has('endTurn'), '', 'primary'),
   ].join('');
 }
 
@@ -668,7 +710,7 @@ function renderSheet(legal) {
 function autoSheet() {
   if (cover || S.phase === 'over') return null;
   if (S.pending?.type === 'discard' && S.pending.counts[viewer] && isHuman(viewer)) return 'discard';
-  if (S.pending?.type === 'steal' && S.current === viewer) return 'steal';
+  if (S.pending?.type === 'steal' && banditMover(S) === viewer) return 'steal';
   const t = S.trade;
   if (t && countering !== null && t.responses[countering] === null) return 'counter';
   if (t) {

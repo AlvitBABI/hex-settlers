@@ -17,6 +17,9 @@ const seats = [
   { kind: 'bot', name: 'Player 4' },
 ];
 let timer = 60;
+let mode = 'classic';
+let rollEvery = 12;
+const ROLL_EVERY = [8, 12, 20];
 const options = { numbers: 'spiral', dice: 'random' };
 
 // Two-or-more-choice settings shown as segmented buttons.
@@ -54,6 +57,14 @@ export function showMenu({ saved, onStart, onContinue }) {
         <h1>Hex Settlers</h1>
         <p class="tag">Gather, trade and build your way to 10 points.</p>
         ${saved ? `<button class="primary wide" data-menu="continue">Continue saved game</button>` : ''}
+        <h2>Game mode</h2>
+        <div class="seg">
+          <button data-mode="classic" class="${mode === 'classic' ? 'on' : ''}">Classic</button>
+          <button data-mode="rush" class="${mode === 'rush' ? 'on' : ''}">⚡ Rush</button>
+        </div>
+        <p class="hint">${mode === 'rush'
+          ? 'Real-time: no turns. Everyone builds and trades at once while the dice roll on a clock. You against bots.'
+          : 'Take turns: roll, build, trade, end your turn.'}</p>
         <h2>Players</h2>
         <div class="seats">
           ${seats.map((s, i) => `
@@ -65,7 +76,7 @@ export function showMenu({ saved, onStart, onContinue }) {
               ${i === 0 ? '<span class="you">You</span>' : `
                 <div class="seg small">
                   ${['human', 'bot', 'off'].map((k) => `
-                    <button data-seat="${i}" data-kind="${k}" class="${s.kind === k ? 'on' : ''}">
+                    <button data-seat="${i}" data-kind="${k}" class="${s.kind === k ? 'on' : ''}" ${mode === 'rush' && k === 'human' ? 'disabled' : ''}>
                       ${k === 'human' ? 'Human' : k === 'bot' ? 'Bot' : 'Off'}</button>`).join('')}
                 </div>`}
             </div>`).join('')}
@@ -74,12 +85,18 @@ export function showMenu({ saved, onStart, onContinue }) {
           <h2>${set.title}</h2>
           <div class="seg">${set.choices.map(([v, label]) => `<button data-opt="${set.key}" data-val="${v}" class="${options[set.key] === v ? 'on' : ''}">${label}</button>`).join('')}</div>
           <p class="hint">${set.hint[options[set.key]]}</p>`).join('')}
+        ${mode === 'rush' ? `
+        <h2>Roll every</h2>
+        <div class="seg">
+          ${ROLL_EVERY.map((t) => `<button data-roll="${t}" class="${rollEvery === t ? 'on' : ''}">${t}s</button>`).join('')}
+        </div>
+        <p class="hint">The dice roll by themselves. Tap "Roll now" to go faster.</p>` : `
         <h2>Turn timer</h2>
         <div class="seg">
           ${TIMERS.map((t) => `<button data-timer="${t.seconds}" class="${timer === t.seconds ? 'on' : ''}">${t.label}</button>`).join('')}
         </div>
         <p class="hint">When time runs out the game plays for you: it rolls, discards,
-          moves the bandit and ends your turn.</p>
+          moves the bandit and ends your turn.</p>`}
         <button class="primary wide big" data-menu="start" ${players.length < 2 ? 'disabled' : ''}>
           Start game (${players.length} players)</button>
         <p class="hint">Humans share this phone and pass it round. Bots play by themselves.</p>
@@ -91,9 +108,15 @@ export function showMenu({ saved, onStart, onContinue }) {
     if (!b) return;
     if (b.dataset.seat) seats[b.dataset.seat].kind = b.dataset.kind;
     if (b.dataset.timer) timer = Number(b.dataset.timer);
+    if (b.dataset.roll) rollEvery = Number(b.dataset.roll);
+    if (b.dataset.mode) {
+      mode = b.dataset.mode;
+      // Rush is real time, so it can't be passed round one phone: bots only.
+      if (mode === 'rush') for (const seat of seats.slice(1)) if (seat.kind === 'human') seat.kind = 'bot';
+    }
     if (b.dataset.opt) options[b.dataset.opt] = b.dataset.val;
     if (b.dataset.menu === 'start') {
-      onStart({ players: playersFromSeats(), turnTime: timer, options: { ...options }, seed: Math.random().toString(36).slice(2, 8) });
+      onStart({ players: playersFromSeats(), turnTime: timer, rollEvery, options: { ...options, mode }, seed: Math.random().toString(36).slice(2, 8) });
       return;
     }
     if (b.dataset.menu === 'continue') { onContinue(); return; }
