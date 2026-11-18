@@ -41,6 +41,7 @@ let mode = null;       // 'road' | 'settlement' | 'city' while choosing a spot
 let userSheet = null;  // 'trade' | 'cards' | 'leave' when opened by a button
 let draft = null;      // trade being built: { give: {}, get: {} }
 let backToTrade = false; // reopen the trade panel when an offer closes
+let countering = null;  // a human building a counter-offer to the open trade
 let discardPick = {};
 let harvestPick = null; // [] while picking Harvest, 'monopoly' while picking Monopoly
 let targets = [];
@@ -60,7 +61,7 @@ export function startGame({ config: cfg, state, onExit: exit }) {
   S = state;
   onExit = exit;
   viewer = S.players.find((p) => p.kind === 'human').id;
-  mode = null; userSheet = null; harvestPick = null; discardPick = {}; undoStack = []; backToTrade = false;
+  mode = null; userSheet = null; harvestPick = null; discardPick = {}; undoStack = []; backToTrade = false; countering = null;
   deadline = null; deadlineKey = null; expiredKey = null;
   resetDraft();
   updateViewer();
@@ -106,6 +107,7 @@ function changed(prev, { save = true, quiet = false } = {}) {
   const myTurn = S.phase === 'play' && S.current === viewer && !S.pending && !S.trade;
   if (mode && !myTurn) mode = null;
   if (S.pending?.type !== 'discard') discardPick = {};
+  if (countering !== null && S.trade?.responses[countering] !== null) countering = null;
   if (userSheet === 'trade' && (S.trade || S.pending)) userSheet = null;
   if (userSheet === 'cards' && S.pending) userSheet = null;
   if (backToTrade && !S.trade) {
@@ -184,6 +186,10 @@ function scheduleAuto(prev) {
     }
     undoStack = [];
     S = res.state;
+    if (a.type === 'cancelTrade' && before.trade) {
+      const countered = Object.entries(before.trade.responses).filter(([p, r]) => r === 'counter' && isHuman(Number(p)));
+      if (countered.length) note(`${S.players[a.player].name} turned down the counter-offer`);
+    }
     if (a.type === 'respondTrade' && isHuman(a.player) && !a.accept && !timedOut() && before.trade) {
       const t = before.trade;
       note(`${S.players[t.from].name} wanted ${describe(t.get)}: you don't have it`);
@@ -225,7 +231,7 @@ function updateDeadline() {
 // The clock stops while the phone is being passed, and while your own
 // offer is waiting for answers (so trying trades doesn't eat your turn).
 function timerPaused() {
-  if (cover) return true;
+  if (cover || countering !== null) return true;
   const t = S.trade;
   return !!(t && t.from === viewer && Object.values(t.responses).some((r) => r === null));
 }
@@ -302,9 +308,9 @@ function exit() {
 }
 
 // Add/remove one card on one side of the trade being built.
-function adjustDraft(side, r, delta) {
+function adjustDraft(side, r, delta, who = viewer) {
   const other = side === 'give' ? 'get' : 'give';
-  const max = side === 'give' ? S.players[viewer].hand[r] : 19;
+  const max = side === 'give' ? S.players[who].hand[r] : 19;
   draft[side][r] = Math.min(max, Math.max(0, (draft[side][r] ?? 0) + delta));
   if (draft[side][r] > 0) draft[other][r] = 0;
 }
@@ -326,8 +332,22 @@ document.addEventListener('click', (e) => {
       }
       return;
     case 'tt':
-      adjustDraft(d.side, d.res, n(d.delta));
+      adjustDraft(d.side, d.res, n(d.delta), countering ?? viewer);
       return render();
+    case 'counter': {
+      // Start a counter-offer: the open deal flipped round, ready to adjust.
+      const t = S.trade;
+      countering = n(d.player);
+      draft = { give: { ...t.get }, get: { ...t.give } };
+      return render();
+    }
+    case 'counter-back': countering = null; return render();
+    case 'send-counter': {
+      const who = countering;
+      countering = null;
+      dispatch({ type: 'respondTrade', player: who, accept: false, counter: { give: clean(draft.give), get: clean(draft.get) } });
+      return;
+    }
     case 'respond': return dispatch({ type: 'respondTrade', player: n(d.player), accept: d.accept === '1' });
     case 'confirm':
       if (dispatch({ type: 'confirmTrade', player: viewer, with: n(d.with) })) sfx.trade();
@@ -640,7 +660,7 @@ function renderSheet(legal) {
   const close = ['trade', 'cards', 'leave'].includes(kind) ? '<button class="close" data-act="close" aria-label="Close">✕</button>' : '';
   const body = {
     discard: discardSheet, steal: stealSheet, offer: offerSheet, myOffer: myOfferSheet,
-    trade: tradeSheet, cards: cardsSheet, leave: leaveSheet,
+    trade: tradeSheet, cards: cardsSheet, leave: leaveSheet, counter: counterSheet,
   }[kind](legal);
   sheet.innerHTML = `<div class="sheet-inner">${close}${body}</div>`;
 }
@@ -650,6 +670,7 @@ function autoSheet() {
   if (S.pending?.type === 'discard' && S.pending.counts[viewer] && isHuman(viewer)) return 'discard';
   if (S.pending?.type === 'steal' && S.current === viewer) return 'steal';
   const t = S.trade;
+  if (t && countering !== null && t.responses[countering] === null) return 'counter';
   if (t) {
     if (t.from === viewer) return 'myOffer';
     const askable = Object.entries(t.responses).some(([p, r]) => isHuman(Number(p)) && r === null && hasCards(S.players[p].hand, t.get));
@@ -690,6 +711,7 @@ function offerSheet() {
     const id = Number(p);
     const answer = r === null
       ? `<button data-act="respond" data-player="${id}" data-accept="0">No</button>
+         <button data-act="counter" data-player="${id}">Counter</button>
          <button class="primary" data-act="respond" data-player="${id}" data-accept="1">Accept</button>`
       : `<span class="answer ${r}">${r === 'accept' ? 'Accepted' : 'Declined'}</span>`;
     return `<div class="resp" style="--c:${PLAYER_COLOURS[id]}"><span class="dot"></span>${esc(S.players[id].name)}<span class="grow"></span>${answer}</div>`;
@@ -713,8 +735,9 @@ function myOfferSheet() {
     } else if (r === 'decline') right = '<span class="answer decline">No thanks</span>';
     else if (isHuman(id)) {
       const can = hasCards(S.players[id].hand, t.get);
-      right = can ? `<button data-act="respond" data-player="${id}" data-accept="0">No</button>
-        <button data-act="respond" data-player="${id}" data-accept="1">Yes</button>` : '<span class="answer wait">…</span>';
+      right = `<button data-act="respond" data-player="${id}" data-accept="0">No</button>
+        <button data-act="counter" data-player="${id}">Counter</button>
+        ${can ? `<button data-act="respond" data-player="${id}" data-accept="1">Yes</button>` : ''}`;
     } else right = '<span class="answer wait">Thinking…</span>';
     return `<div class="resp" style="--c:${PLAYER_COLOURS[id]}"><span class="dot"></span>${esc(S.players[id].name)}<span class="grow"></span>${right}</div>`;
   }).join('');
@@ -726,18 +749,35 @@ function myOfferSheet() {
 
 // Colonist-style: pick cards to give (tap your hand or the tiles) and to
 // get, then trade with the bank (if the numbers match) or offer to players.
-function tradeSheet() {
-  const hand = S.players[viewer].hand;
-  const give = clean(draft.give), get = clean(draft.get);
-  const tile = (side, r) => {
-    const n = draft[side][r] ?? 0;
-    const full = side === 'give' && n >= hand[r];
-    return `<div class="ttile ${n ? 'on' : ''}" style="--rc:${RESOURCE_COLOUR[r]}">
-      <button class="tadd" data-act="tt" data-side="${side}" data-res="${r}" data-delta="1" ${full ? 'disabled' : ''}>
-        ${icon(r)}${side === 'give' ? `<small>${tradeRatio(S, viewer, r)}:1</small>` : ''}</button>
-      ${n ? `<b>${n}</b><button class="tminus" data-act="tt" data-side="${side}" data-res="${r}" data-delta="-1" aria-label="Remove one">−</button>` : ''}
+// One resource tile in a trade builder (tap to add, − to remove).
+function tradeTile(side, r, who, showRatio) {
+  const n = draft[side][r] ?? 0;
+  const full = side === 'give' && n >= S.players[who].hand[r];
+  return `<div class="ttile ${n ? 'on' : ''}" style="--rc:${RESOURCE_COLOUR[r]}">
+    <button class="tadd" data-act="tt" data-side="${side}" data-res="${r}" data-delta="1" ${full ? 'disabled' : ''}>
+      ${icon(r)}${showRatio && side === 'give' ? `<small>${tradeRatio(S, who, r)}:1</small>` : ''}</button>
+    ${n ? `<b>${n}</b><button class="tminus" data-act="tt" data-side="${side}" data-res="${r}" data-delta="-1" aria-label="Remove one">−</button>` : ''}
+  </div>`;
+}
+
+// Your counter-offer to someone else's trade.
+function counterSheet() {
+  const t = S.trade;
+  const who = countering;
+  const ok = total(clean(draft.give)) > 0 && total(clean(draft.get)) > 0;
+  return `<h3>Counter-offer to ${esc(S.players[t.from].name)}</h3>
+    <p class="sub">${humanCount() > 1 ? `${esc(S.players[who].name)}: ` : ''}change the deal, then send it back.</p>
+    <div class="trow"><span class="tl">Give</span>${RESOURCES.map((r) => tradeTile('give', r, who, false)).join('')}</div>
+    <div class="trow"><span class="tl">Get</span>${RESOURCES.map((r) => tradeTile('get', r, who, false)).join('')}</div>
+    <div class="tbtns" style="margin-top:14px">
+      <button data-act="counter-back">Back</button>
+      <button class="primary" data-act="send-counter" ${ok ? '' : 'disabled'}>Send counter</button>
     </div>`;
-  };
+}
+
+function tradeSheet() {
+  const give = clean(draft.give), get = clean(draft.get);
+  const tile = (side, r) => tradeTile(side, r, viewer, true);
   const bankErr = bankTradeError(S, viewer, give, get);
   const canOffer = total(give) > 0 && total(get) > 0;
   let hint = 'Tap your cards (or the tiles) to choose what to give, then what you want.';
