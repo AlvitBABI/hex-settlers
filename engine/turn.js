@@ -3,7 +3,8 @@ import { COSTS, RESOURCES } from './constants.js';
 import { nextInt } from './rng.js';
 import { CORNER_EDGES, CORNER_NEIGHBOURS, EDGE_CORNERS, CORNER_HEXES, HEX_CORNERS } from './topology.js';
 import { startSeven } from './bandit.js';
-import { emptyHand, hasCards, moveCards, newTurn, log, nameOf, mainTurnError } from './helpers.js';
+import { emptyHand, hasCards, newTurn, log, nameOf, mainTurnError } from './helpers.js';
+import { transfer } from './knowledge.js';
 
 // ---- Placement checks (also used by bots and the UI) ----
 
@@ -63,7 +64,7 @@ export function produce(state, total) {
     }
     gains.forEach((g, p) => {
       const n = Math.min(g[r], state.bank[r]);
-      if (n > 0) moveCards(state.bank, state.players[p].hand, { [r]: n });
+      if (n > 0) transfer(state, 'bank', p, { [r]: n });
     });
   }
 }
@@ -83,7 +84,7 @@ function placeSettlement(s, { player, corner }) {
   if (s.setup.index >= s.players.length) {
     for (const id of CORNER_HEXES[corner]) {
       const r = hexById(s, id).resource;
-      if (r !== 'desert' && s.bank[r] > 0) moveCards(s.bank, s.players[player].hand, { [r]: 1 });
+      if (r !== 'desert' && s.bank[r] > 0) transfer(s, 'bank', player, { [r]: 1 });
     }
   }
   log(s, `${nameOf(s, player)} placed a settlement`);
@@ -144,7 +145,7 @@ function buildRoad(s, { player, edge }) {
   const placeErr = canPlaceRoad(s, player, edge);
   if (placeErr) return placeErr;
   if (free) s.turn.freeRoads--;
-  else moveCards(s.players[player].hand, s.bank, COSTS.road);
+  else transfer(s, player, 'bank', COSTS.road);
   s.roads[edge] = player;
   s.players[player].pieces.roads--;
   log(s, `${nameOf(s, player)} built a road`);
@@ -153,7 +154,7 @@ function buildRoad(s, { player, edge }) {
 function buildSettlement(s, { player, corner }) {
   const err = buildError(s, player, COSTS.settlement, 'settlements') || canPlaceSettlement(s, player, corner);
   if (err) return err;
-  moveCards(s.players[player].hand, s.bank, COSTS.settlement);
+  transfer(s, player, 'bank', COSTS.settlement);
   s.buildings[corner] = { player, type: 'settlement' };
   s.players[player].pieces.settlements--;
   log(s, `${nameOf(s, player)} built a settlement`);
@@ -164,7 +165,7 @@ function buildCity(s, { player, corner }) {
   if (err) return err;
   const b = s.buildings[corner];
   if (!b || b.player !== player || b.type !== 'settlement') return 'A city must replace one of your settlements';
-  moveCards(s.players[player].hand, s.bank, COSTS.city);
+  transfer(s, player, 'bank', COSTS.city);
   b.type = 'city';
   s.players[player].pieces.cities--;
   s.players[player].pieces.settlements++; // the settlement piece comes back

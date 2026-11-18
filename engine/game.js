@@ -8,6 +8,7 @@ import { createRng, shuffle } from './rng.js';
 import { generateBoard } from './board.js';
 import { RESOURCES, BANK_SIZE, PIECES, CARD_COUNTS } from './constants.js';
 import { clone, emptyHand, newTurn } from './helpers.js';
+import { newKnowledge } from './knowledge.js';
 import * as turn from './turn.js';
 import * as bandit from './bandit.js';
 import * as trade from './trade.js';
@@ -55,6 +56,7 @@ export function createGame({ seed, players }) {
     winner: null,
     log: [],
     logCount: 0,
+    seen: newKnowledge(players.length), // what each player has seen of the others' cards
   };
 }
 

@@ -8,6 +8,19 @@ import { canPlaceSettlement, legalSettlementCorners } from '../engine/turn.js';
 import { tradeRatio, dealWith } from '../engine/trade.js';
 import { points } from '../engine/scoring.js';
 import { handSize, hasCards } from '../engine/helpers.js';
+import { knownHand } from '../engine/knowledge.js';
+
+// Bots don't peek: they only use what they have seen (engine/knowledge.js).
+// Probably has r: we saw them get one, or they hold 2+ cards we couldn't see.
+function mayHave(s, me, other, r) {
+  const k = knownHand(s, me, other);
+  return k.known[r] > 0 || k.unknown >= 2;
+}
+// Best guess at how many r another player holds.
+function guessCount(s, me, other, r) {
+  const k = knownHand(s, me, other);
+  return k.known[r] + k.unknown / 5;
+}
 
 const pips = (n) => (n ? 6 - Math.abs(7 - n) : 0);
 const WEIGHT = { wood: 1, clay: 1, sheep: 0.85, wheat: 1.1, ore: 1.1, desert: 0 };
@@ -186,9 +199,8 @@ export function counterOffer(s, p) {
   const t = s.trade;
   if (!t || nearWin(s, t.from)) return null;
   const hand = s.players[p].hand;
-  const theirs = s.players[t.from].hand;
   const cost = goal(s, p).cost;
-  const want = needed(hand, cost).find((r) => theirs[r] > 0);
+  const want = needed(hand, cost).find((r) => mayHave(s, p, t.from, r));
   if (!want) return null;
   const options = [];
   if (hasCards(hand, t.get)) options.push({ give: t.get, get: { [want]: 1 } }); // what you asked for, but I want this
@@ -287,7 +299,7 @@ export function chooseAction(s, p) {
     if (action) return action;
   }
   if (card('monopoly').length) {
-    const others = (r) => s.players.reduce((n, o) => n + (o.id === p ? 0 : o.hand[r]), 0);
+    const others = (r) => s.players.reduce((n, o) => n + (o.id === p ? 0 : guessCount(s, p, o.id, r)), 0);
     const r = RESOURCES.slice().sort((a, b) => others(b) - others(a))[0];
     if (others(r) >= 3) return card('monopoly').find((a) => a.resource === r);
   }
@@ -306,7 +318,7 @@ export function chooseAction(s, p) {
     // Ask the players, but only for a card somebody actually holds.
     const spare = surplus(pl.hand, g.cost);
     const short = missing(pl.hand, g.cost);
-    const get = want.find((r) => s.players.some((o) => o.id !== p && o.hand[r] > 0));
+    const get = want.find((r) => s.players.some((o) => o.id !== p && mayHave(s, p, o.id, r)));
     if (s.turn.offers < MAX_OFFERS && spare.length && get && short <= 2) {
       let give = null;
       if (s.turn.offers === 0) give = { [spare[0]]: 1 };

@@ -1,5 +1,6 @@
 // Test helpers: quick game setups. Not a test file itself.
 import { createGame, applyAction, legalActions } from '../engine/game.js';
+import { transfer } from '../engine/knowledge.js';
 
 export function newGame(n = 4, seed = 'test') {
   const players = Array.from({ length: n }, (_, i) => ({ name: `P${i + 1}`, kind: 'bot' }));
@@ -20,10 +21,10 @@ export function afterSetup(n = 4, seed = 'test') {
   return s;
 }
 
-export const give = (s, p, cards) => {
-  for (const [r, n] of Object.entries(cards)) { s.players[p].hand[r] += n; s.bank[r] -= n; }
-};
+// Shortcuts that deal cards openly from the bank (everyone sees, like
+// production), so what bots "know" stays consistent with the hands.
+export const give = (s, p, cards) => transfer(s, 'bank', p, cards);
 
 export const emptyHands = (s) => {
-  for (const pl of s.players) for (const r of Object.keys(pl.hand)) { s.bank[r] += pl.hand[r]; pl.hand[r] = 0; }
+  for (const pl of s.players) transfer(s, pl.id, 'bank', { ...pl.hand });
 };

@@ -3,7 +3,21 @@ import assert from 'node:assert/strict';
 import { createGame, applyAction, waitingFor } from '../engine/game.js';
 import { chooseAction, timeoutAction, wantsTrade, counterOffer, dealScore } from '../bots/bot.js';
 import { points } from '../engine/scoring.js';
+import { knownHand } from '../engine/knowledge.js';
+import { handSize } from '../engine/helpers.js';
 import { act, afterSetup, give, emptyHands } from './helpers.js';
+
+// The notebook never claims more than the truth, and its total is right.
+function checkKnowledge(s, seed) {
+  for (const o of s.players) {
+    for (const p of s.players) {
+      const k = knownHand(s, o.id, p.id);
+      const sum = Object.values(k.known).reduce((a, b) => a + b, 0) + k.unknown;
+      assert.equal(sum, handSize(p.hand), `seed ${seed}: ${o.id} about ${p.id} total`);
+      for (const [r, n] of Object.entries(k.known)) assert.ok(n <= p.hand[r], `seed ${seed}: ${o.id} thinks ${p.id} has ${n} ${r}`);
+    }
+  }
+}
 
 // Play a whole game with bots only. Every bot action must be legal.
 function playOut(n, seed, pick = chooseAction) {
@@ -17,6 +31,7 @@ function playOut(n, seed, pick = chooseAction) {
       const res = applyAction(s, action);
       assert.ok(res.ok, `seed ${seed} step ${steps}: ${JSON.stringify(action)} -> ${res.error}`);
       s = res.state;
+      checkKnowledge(s, seed);
       moved = true;
       steps++;
       break;

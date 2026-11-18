@@ -2,7 +2,8 @@
 // Player trades: the current player offers, others accept or decline,
 // then the offerer picks one who accepted (or cancels).
 import { RESOURCES } from './constants.js';
-import { isCardBundle, bundleSize, hasCards, moveCards, mainTurnError, log, nameOf } from './helpers.js';
+import { isCardBundle, bundleSize, hasCards, mainTurnError, log, nameOf } from './helpers.js';
+import { transfer } from './knowledge.js';
 
 const MAX_OFFERS_PER_TURN = 20;
 
@@ -53,8 +54,8 @@ function bankTrade(s, { player, give, get }) {
   }
   const tradeErr = bankTradeError(s, player, give, get);
   if (tradeErr) return tradeErr;
-  moveCards(s.players[player].hand, s.bank, clean(give));
-  moveCards(s.bank, s.players[player].hand, clean(get));
+  transfer(s, player, 'bank', clean(give));
+  transfer(s, 'bank', player, clean(get));
   log(s, `${nameOf(s, player)} traded ${bundleSize(give)} cards for ${bundleSize(get)} with the bank`);
 }
 
@@ -109,8 +110,8 @@ function confirmTrade(s, { player, with: partner }) {
   const me = s.players[player].hand;
   const them = s.players[partner].hand;
   if (!hasCards(me, deal.give) || !hasCards(them, deal.get)) return 'Someone no longer has the cards';
-  moveCards(me, them, deal.give);
-  moveCards(them, me, deal.get);
+  transfer(s, player, partner, deal.give);
+  transfer(s, partner, player, deal.get);
   s.trade = null;
   log(s, `${nameOf(s, player)} traded with ${nameOf(s, partner)}`);
 }

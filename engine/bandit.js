@@ -3,7 +3,8 @@
 import { RESOURCES, DISCARD_LIMIT } from './constants.js';
 import { nextInt } from './rng.js';
 import { HEX_CORNERS } from './topology.js';
-import { handSize, isCardBundle, bundleSize, hasCards, moveCards, log, nameOf } from './helpers.js';
+import { handSize, isCardBundle, bundleSize, hasCards, log, nameOf } from './helpers.js';
+import { transfer } from './knowledge.js';
 
 // Called when a 7 is rolled.
 export function startSeven(s) {
@@ -30,7 +31,7 @@ function discard(s, { player, cards }) {
   if (!need) return 'You do not need to discard';
   if (!isCardBundle(cards) || bundleSize(cards) !== need) return `Discard exactly ${need} cards`;
   if (!hasCards(s.players[player].hand, cards)) return 'You do not have those cards';
-  moveCards(s.players[player].hand, s.bank, cards);
+  transfer(s, player, 'bank', cards);
   delete s.pending.counts[player];
   log(s, `${nameOf(s, player)} discarded ${need} cards`);
   if (Object.keys(s.pending.counts).length === 0) s.pending = { type: 'moveBandit' };
@@ -55,7 +56,8 @@ function steal(s, { player, victim }) {
   const cards = RESOURCES.flatMap((r) => Array(hand[r]).fill(r));
   const pick = nextInt(s.rng, cards.length);
   s.rng = pick.rng;
-  moveCards(hand, s.players[player].hand, { [cards[pick.value]]: 1 });
+  // Only the thief and the victim see which card it was.
+  transfer(s, victim, player, { [cards[pick.value]]: 1 }, [player, victim]);
   s.pending = null;
   log(s, `${nameOf(s, player)} stole a card from ${nameOf(s, victim)}`);
 }

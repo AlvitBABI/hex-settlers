@@ -6,7 +6,8 @@
 //   harvest  - take any 2 resources from the bank
 //   monopoly - every other player gives you all of one resource
 import { COSTS, RESOURCES, STRONGEST_ARMY_MIN } from './constants.js';
-import { hasCards, moveCards, mainTurnError, log, nameOf } from './helpers.js';
+import { hasCards, mainTurnError, log, nameOf } from './helpers.js';
+import { transfer } from './knowledge.js';
 import { legalRoadEdges } from './turn.js';
 
 export const CARD_NAMES = {
@@ -22,7 +23,7 @@ function buyCard(s, { player }) {
   if (!s.turn.rolled) return 'Roll the dice first';
   if (!s.deck.length) return 'No bonus cards left';
   if (!hasCards(s.players[player].hand, COSTS.card)) return 'Not enough resources';
-  moveCards(s.players[player].hand, s.bank, COSTS.card);
+  transfer(s, player, 'bank', COSTS.card);
   s.players[player].cards.push({ type: s.deck.shift(), turn: s.turn.number });
   log(s, `${nameOf(s, player)} bought a bonus card`);
 }
@@ -54,12 +55,12 @@ function playCard(s, { player, card, resources, resource }) {
     const want = {};
     for (const r of resources) want[r] = (want[r] ?? 0) + 1;
     if (!hasCards(s.bank, want)) return 'The bank does not have those';
-    moveCards(s.bank, pl.hand, want);
+    transfer(s, 'bank', player, want);
   } else if (card === 'monopoly') {
     if (!RESOURCES.includes(resource)) return 'Pick a resource';
     for (const other of s.players) {
       if (other.id !== player && other.hand[resource] > 0) {
-        moveCards(other.hand, pl.hand, { [resource]: other.hand[resource] });
+        transfer(s, other.id, player, { [resource]: other.hand[resource] });
       }
     }
   } else {
