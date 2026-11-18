@@ -1,0 +1,54 @@
+:root {
+  --bg: #1e3a5f;
+  --sea: #2f6b9a;
+  --text: #ffffff;
+  --button: #ffffff22;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden;
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, system-ui, sans-serif;
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+}
+body { display: flex; flex-direction: column; height: 100dvh; padding-bottom: env(safe-area-inset-bottom); }
+
+header {
+  display: flex; align-items: center; gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 8px) 16px 8px;
+}
+header h1 { font-size: 1.05rem; margin: 0; flex: 1; white-space: nowrap; }
+#seed { font-size: .8rem; opacity: .7; font-variant-numeric: tabular-nums; }
+button {
+  font: inherit; font-size: .9rem; color: var(--text);
+  background: var(--button); border: 0; border-radius: 10px;
+  padding: 8px 12px; min-height: 44px; /* big enough for a thumb */
+}
+button:active { background: #ffffff44; }
+
+#board {
+  flex: 1; width: 100%; display: block;
+  touch-action: none; /* we handle pinch and drag ourselves */
+  background: var(--sea);
+}
+
+.hex { stroke: #f4ecd8; stroke-width: 3; stroke-linejoin: round; }
+.tile-label {
+  font-size: 10px; text-anchor: middle; dominant-baseline: middle;
+  fill: #00000099; font-weight: 600;
+}
+.token { fill: #f7f1e1; stroke: #00000033; stroke-width: 1; }
+.token-number {
+  font-size: 17px; font-weight: 700; text-anchor: middle; dominant-baseline: central;
+  fill: #222;
+}
+.token-number.red, .pip.red { fill: #c62828; }
+.pip { fill: #222; }
+.dock { stroke: #f4ecd8; stroke-width: 3; stroke-linecap: round; }
+.port-badge { stroke: #f4ecd8; stroke-width: 2; }
+.port-ratio, .port-type {
+  text-anchor: middle; dominant-baseline: middle; fill: #222; font-weight: 700;
+}
+.port-ratio { font-size: 10px; }
+.port-type { font-size: 7px; font-weight: 600; }

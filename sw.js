@@ -1,5 +1,5 @@
 // Bump this number whenever you change any cached file, so phones fetch the update.
-const CACHE = 'hex-settlers-v1';
+const CACHE = 'hex-settlers-v2';
 const FILES = [
   './',
   './index.html',
@@ -7,6 +7,14 @@ const FILES = [
   './icons/icon-180.png',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './ui/styles.css',
+  './ui/main.js',
+  './ui/board-view.js',
+  './ui/pan-zoom.js',
+  './engine/rng.js',
+  './engine/hex.js',
+  './engine/constants.js',
+  './engine/board.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -24,9 +32,10 @@ self.addEventListener('activate', (event) => {
 });
 
 // Cache first: serve from the phone's storage, fall back to the network.
+// ignoreSearch: "./?seed=abc" is served by the cached "./" page.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
-    caches.match(event.request).then((hit) => hit || fetch(event.request))
+    caches.match(event.request, { ignoreSearch: true }).then((hit) => hit || fetch(event.request))
   );
 });
