@@ -1,5 +1,5 @@
 // Bump this number whenever you change any cached file, so phones fetch the update.
-const CACHE = 'hex-settlers-v9';
+const CACHE = 'hex-settlers-v10';
 const FILES = [
   './',
   './index.html',

@@ -45,6 +45,7 @@ export function enablePanZoom(svg, bounds, { onTap = () => {} } = {}) {
   function fit() {
     const { width, height } = rect();
     if (!width || !height) return;
+    lastSize = `${Math.round(width)}x${Math.round(height)}`;
     fitScale = Math.max(bounds.width / width, bounds.height / height);
     view.scale = fitScale;
     view.cx = bounds.x + bounds.width / 2;
@@ -110,11 +111,29 @@ export function enablePanZoom(svg, bounds, { onTap = () => {} } = {}) {
     document.addEventListener(type, (e) => e.preventDefault());
   }
 
-  window.addEventListener('resize', fit);
+  // When the board area changes size (rotating the phone, or the bars
+  // above/below it growing), keep the same zoom and centre instead of
+  // letting the browser stretch the drawing. Stay "fitted" if we were.
+  let lastSize = '';
+  function checkSize() {
+    const { width, height } = rect();
+    const size = `${Math.round(width)}x${Math.round(height)}`;
+    if (!width || !height || size === lastSize) return;
+    const first = lastSize === '';
+    lastSize = size;
+    if (first) return;
+    const wasFitted = Math.abs(view.scale - fitScale) < 1e-9;
+    fitScale = Math.max(bounds.width / width, bounds.height / height);
+    if (wasFitted) view.scale = fitScale;
+    apply();
+  }
+  // Watch the box around the board (an <svg> reports its drawing, not its box).
+  new ResizeObserver(checkSize).observe(svg.parentElement);
   fit();
 
   return {
     fit,
+    checkSize, // call after the screen redraws, in case the board area changed size
     setBounds(b) { bounds = b; fit(); },
     setOnTap(fn) { onTap = fn; },
   };
