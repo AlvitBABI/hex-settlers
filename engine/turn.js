@@ -3,7 +3,7 @@ import { COSTS, RESOURCES, BALANCED_RESHUFFLE_AT } from './constants.js';
 import { nextInt, shuffle } from './rng.js';
 import { CORNER_EDGES, CORNER_NEIGHBOURS, EDGE_CORNERS, CORNER_HEXES, HEX_CORNERS } from './topology.js';
 import { startSeven } from './bandit.js';
-import { emptyHand, hasCards, newTurn, log, nameOf, mainTurnError } from './helpers.js';
+import { emptyHand, hasCards, newTurn, log, nameOf, mainTurnError, isRush, needsRoll, freeRoadsOf, setFreeRoads } from './helpers.js';
 import { transfer } from './knowledge.js';
 
 // ---- Placement checks (also used by bots and the UI) ----
@@ -134,14 +134,21 @@ function placeRoad(s, { player, edge }) {
 }
 
 function roll(s, { player }) {
-  const err = mainTurnError(s, player);
-  if (err) return err;
-  if (s.turn.rolled) return 'You already rolled';
+  if (isRush(s)) {
+    // Rush: the clock rolls. Each roll starts a new round.
+    if (s.phase !== 'play') return 'The game is not in the main phase';
+    if (s.pending) return 'Wait: the bandit is being dealt with';
+    s.turn = newTurn(s.turn.number + 1);
+  } else {
+    const err = mainTurnError(s, player);
+    if (err) return err;
+    if (s.turn.rolled) return 'You already rolled';
+  }
   const dice = throwDice(s);
   const total = dice[0] + dice[1];
   s.turn.rolled = true;
   s.turn.dice = dice;
-  log(s, `${nameOf(s, player)} rolled ${total}`);
+  log(s, isRush(s) ? `Rolled ${total}` : `${nameOf(s, player)} rolled ${total}`);
   if (total === 7) startSeven(s); // a 7 produces nothing: the bandit moves
   else produce(s, total);
 }
@@ -150,21 +157,21 @@ function roll(s, { player }) {
 function buildError(s, player, cost, piece) {
   const err = mainTurnError(s, player);
   if (err) return err;
-  if (!s.turn.rolled) return 'Roll the dice first';
+  if (needsRoll(s)) return 'Roll the dice first';
   if (s.players[player].pieces[piece] <= 0) return `No ${piece} left`;
   if (cost && !hasCards(s.players[player].hand, cost)) return 'Not enough resources';
   return null;
 }
 
 function buildRoad(s, { player, edge }) {
-  const free = s.turn.freeRoads > 0 && player === s.current;
+  const free = freeRoadsOf(s, player) > 0;
   const err = free
     ? mainTurnError(s, player) || (s.players[player].pieces.roads <= 0 ? 'No roads left' : null)
     : buildError(s, player, COSTS.road, 'roads');
   if (err) return err;
   const placeErr = canPlaceRoad(s, player, edge);
   if (placeErr) return placeErr;
-  if (free) s.turn.freeRoads--;
+  if (free) setFreeRoads(s, player, freeRoadsOf(s, player) - 1);
   else transfer(s, player, 'bank', COSTS.road);
   s.roads[edge] = player;
   s.players[player].pieces.roads--;
@@ -193,6 +200,7 @@ function buildCity(s, { player, corner }) {
 }
 
 function endTurn(s, { player }) {
+  if (isRush(s)) return 'There are no turns in Rush';
   const err = mainTurnError(s, player);
   if (err) return err;
   if (!s.turn.rolled) return 'Roll the dice first';
@@ -213,8 +221,8 @@ export function legal(state, p) {
   if (mainTurnError(state, p)) return [];
   const pl = state.players[p];
   const roads = () => legalRoadEdges(state, p).map((edge) => ({ type: 'buildRoad', player: p, edge }));
-  if (state.turn.freeRoads > 0) return roads();
-  if (!state.turn.rolled) return [{ type: 'roll', player: p }];
+  if (freeRoadsOf(state, p) > 0) return roads();
+  if (needsRoll(state)) return [{ type: 'roll', player: p }];
   const out = [];
   if (pl.pieces.roads > 0 && hasCards(pl.hand, COSTS.road)) out.push(...roads());
   if (pl.pieces.settlements > 0 && hasCards(pl.hand, COSTS.settlement)) {
@@ -225,6 +233,6 @@ export function legal(state, p) {
       if (b.player === p && b.type === 'settlement') out.push({ type: 'buildCity', player: p, corner });
     }
   }
-  out.push({ type: 'endTurn', player: p });
+  if (!isRush(state)) out.push({ type: 'endTurn', player: p }); // Rush: the clock rolls, no turns
   return out;
 }

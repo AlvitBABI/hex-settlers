@@ -6,7 +6,7 @@
 //   harvest  - take any 2 resources from the bank
 //   monopoly - every other player gives you all of one resource
 import { COSTS, RESOURCES, STRONGEST_ARMY_MIN } from './constants.js';
-import { hasCards, mainTurnError, log, nameOf } from './helpers.js';
+import { hasCards, mainTurnError, log, nameOf, needsRoll, freeRoadsOf, setFreeRoads, cardPlayedBy, markCardPlayed, isRush } from './helpers.js';
 import { transfer } from './knowledge.js';
 import { legalRoadEdges } from './turn.js';
 
@@ -20,7 +20,7 @@ const playable = (state, p, type) =>
 function buyCard(s, { player }) {
   const err = mainTurnError(s, player);
   if (err) return err;
-  if (!s.turn.rolled) return 'Roll the dice first';
+  if (needsRoll(s)) return 'Roll the dice first';
   if (!s.deck.length) return 'No bonus cards left';
   if (!hasCards(s.players[player].hand, COSTS.card)) return 'Not enough resources';
   transfer(s, player, 'bank', COSTS.card);
@@ -31,7 +31,7 @@ function buyCard(s, { player }) {
 function playCard(s, { player, card, resources, resource }) {
   const err = mainTurnError(s, player);
   if (err) return err;
-  if (s.turn.cardPlayed) return 'Only one bonus card per turn';
+  if (cardPlayedBy(s, player)) return isRush(s) ? 'Only one bonus card per roll' : 'Only one bonus card per turn';
   if (card === 'point') return 'Victory Point cards count automatically';
   const index = playable(s, player, card);
   if (index < 0) return 'You have no playable card of that kind (new cards wait a turn)';
@@ -39,7 +39,7 @@ function playCard(s, { player, card, resources, resource }) {
 
   if (card === 'soldier') {
     pl.soldiers++;
-    s.pending = { type: 'moveBandit' };
+    s.pending = { type: 'moveBandit', player };
     const army = s.largestArmy;
     if (pl.soldiers >= STRONGEST_ARMY_MIN && pl.soldiers > army.count) {
       if (army.player !== player) log(s, `${pl.name} takes the Strongest Army bonus`);
@@ -47,7 +47,7 @@ function playCard(s, { player, card, resources, resource }) {
     }
   } else if (card === 'roads') {
     if (pl.pieces.roads === 0 || !legalRoadEdges(s, player).length) return 'Nowhere to build roads';
-    s.turn.freeRoads = Math.min(2, pl.pieces.roads);
+    setFreeRoads(s, player, Math.min(2, pl.pieces.roads));
   } else if (card === 'harvest') {
     if (!Array.isArray(resources) || resources.length !== 2 || !resources.every((r) => RESOURCES.includes(r))) {
       return 'Pick 2 resources';
@@ -67,7 +67,7 @@ function playCard(s, { player, card, resources, resource }) {
     return 'Unknown card';
   }
   pl.cards.splice(index, 1);
-  s.turn.cardPlayed = true;
+  markCardPlayed(s, player);
   log(s, `${pl.name} played ${CARD_NAMES[card]}`);
 }
 
@@ -75,18 +75,17 @@ export const handlers = { buyCard, playCard };
 
 // Free roads end early if there's nowhere left to put them.
 export function after(s) {
-  if (s.turn.freeRoads > 0 &&
-      (s.players[s.current].pieces.roads === 0 || !legalRoadEdges(s, s.current).length)) {
-    s.turn.freeRoads = 0;
+  for (const p of s.players) {
+    if (freeRoadsOf(s, p.id) > 0 && (p.pieces.roads === 0 || !legalRoadEdges(s, p.id).length)) setFreeRoads(s, p.id, 0);
   }
 }
 
 export function legal(state, p) {
-  if (mainTurnError(state, p) || state.turn.freeRoads > 0) return [];
+  if (mainTurnError(state, p) || freeRoadsOf(state, p) > 0) return [];
   const out = [];
   const pl = state.players[p];
-  if (state.turn.rolled && state.deck.length && hasCards(pl.hand, COSTS.card)) out.push({ type: 'buyCard', player: p });
-  if (state.turn.cardPlayed) return out;
+  if (!needsRoll(state) && state.deck.length && hasCards(pl.hand, COSTS.card)) out.push({ type: 'buyCard', player: p });
+  if (cardPlayedBy(state, p)) return out;
   if (playable(state, p, 'soldier') >= 0) out.push({ type: 'playCard', player: p, card: 'soldier' });
   if (playable(state, p, 'roads') >= 0 && pl.pieces.roads > 0 && legalRoadEdges(state, p).length) {
     out.push({ type: 'playCard', player: p, card: 'roads' });

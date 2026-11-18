@@ -2,7 +2,7 @@
 // Player trades: the current player offers, others accept or decline,
 // then the offerer picks one who accepted (or cancels).
 import { RESOURCES } from './constants.js';
-import { isCardBundle, bundleSize, hasCards, mainTurnError, log, nameOf } from './helpers.js';
+import { isCardBundle, bundleSize, hasCards, mainTurnError, log, nameOf, needsRoll, freeRoadsOf } from './helpers.js';
 import { transfer } from './knowledge.js';
 
 const MAX_OFFERS_PER_TURN = 20;
@@ -46,7 +46,7 @@ export function bankTradeError(s, player, give, get) {
 function bankTrade(s, { player, give, get }) {
   const err = mainTurnError(s, player);
   if (err) return err;
-  if (!s.turn.rolled) return 'Roll the dice first';
+  if (needsRoll(s)) return 'Roll the dice first';
   if (typeof give === 'string') {
     if (!RESOURCES.includes(give) || !RESOURCES.includes(get) || give === get) return 'Pick two different resources';
     give = { [give]: tradeRatio(s, player, give) };
@@ -62,7 +62,8 @@ function bankTrade(s, { player, give, get }) {
 function offerTrade(s, { player, give, get }) {
   const err = mainTurnError(s, player);
   if (err) return err;
-  if (!s.turn.rolled) return 'Roll the dice first';
+  if (needsRoll(s)) return 'Roll the dice first';
+  if (s.trade) return 'Another trade is open';
   if (!isCardBundle(give) || !isCardBundle(get)) return 'Bad trade';
   if (!bundleSize(give) || !bundleSize(get)) return 'Both sides of a trade need cards';
   if (RESOURCES.some((r) => give[r] > 0 && get[r] > 0)) return 'A resource cannot be on both sides';
@@ -139,7 +140,7 @@ export function legal(state, p) {
     if (hasCards(state.players[p].hand, t.get)) out.push({ type: 'respondTrade', player: p, accept: true });
     return out;
   }
-  if (mainTurnError(state, p) || !state.turn.rolled || state.turn.freeRoads > 0) return [];
+  if (mainTurnError(state, p) || needsRoll(state) || freeRoadsOf(state, p) > 0) return [];
   // Offers to players are free-form, so they are not listed here.
   const out = [];
   for (const give of RESOURCES) {

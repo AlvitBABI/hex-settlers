@@ -7,7 +7,7 @@ import { CORNER_HEXES, CORNER_NEIGHBOURS, EDGE_CORNERS, HEX_CORNERS } from '../e
 import { canPlaceSettlement, legalSettlementCorners } from '../engine/turn.js';
 import { tradeRatio, dealWith } from '../engine/trade.js';
 import { points } from '../engine/scoring.js';
-import { handSize, hasCards } from '../engine/helpers.js';
+import { handSize, hasCards, isRush, needsRoll, freeRoadsOf } from '../engine/helpers.js';
 import { knownHand } from '../engine/knowledge.js';
 
 // Bots don't peek: they only use what they have seen (engine/knowledge.js).
@@ -276,11 +276,11 @@ export function chooseAction(s, p) {
   }
 
   const pl = s.players[p];
-  if (s.turn.freeRoads > 0) return { type: 'buildRoad', player: p, edge: bestRoad(s, p, find('buildRoad').map((a) => a.edge)) };
+  if (freeRoadsOf(s, p) > 0) return { type: 'buildRoad', player: p, edge: bestRoad(s, p, find('buildRoad').map((a) => a.edge)) };
 
   const banditOnMe = HEX_CORNERS[s.bandit]?.some((c) => s.buildings[c]?.player === p);
   const soldier = legal.find((a) => a.type === 'playCard' && a.card === 'soldier');
-  if (!s.turn.rolled) return soldier && banditOnMe ? soldier : { type: 'roll', player: p };
+  if (needsRoll(s)) return soldier && banditOnMe ? soldier : { type: 'roll', player: p };
 
   // 1. Build the best thing we can afford.
   const cities = find('buildCity');
@@ -353,7 +353,8 @@ export function chooseAction(s, p) {
       if (edge) return { type: 'buildRoad', player: p, edge };
     }
   }
-  return { type: 'endTurn', player: p };
+  // Rush has no turns: nothing useful to do, so wait for the next roll.
+  return isRush(s) ? null : { type: 'endTurn', player: p };
 }
 
 // When a human's timer runs out: do the least surprising thing
@@ -367,7 +368,8 @@ export function timeoutAction(s, p) {
       ? { type: 'cancelTrade', player: p }
       : (s.trade.responses[p] === null ? { type: 'respondTrade', player: p, accept: false } : null);
   }
-  if (s.turn.freeRoads > 0) return chooseAction(s, p);
+  if (freeRoadsOf(s, p) > 0) return chooseAction(s, p);
+  if (isRush(s)) return null; // no turn to end; the clock keeps the game moving
   if (!s.turn.rolled) return { type: 'roll', player: p };
   return { type: 'endTurn', player: p };
 }

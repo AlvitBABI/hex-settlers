@@ -35,7 +35,7 @@ test('soldier moves the bandit; only one card per turn; can be played before rol
   oldCard(s, 0, 'soldier'); oldCard(s, 0, 'soldier');
   assert.ok(legalActions(s).some((a) => a.type === 'playCard'));
   s = act(s, { type: 'playCard', player: 0, card: 'soldier' });
-  assert.deepEqual(s.pending, { type: 'moveBandit' });
+  assert.deepEqual(s.pending, { type: 'moveBandit', player: 0 });
   assert.equal(s.players[0].soldiers, 1);
   const hex = legalActions(s)[0].hex;
   s = act(s, { type: 'moveBandit', player: 0, hex });

@@ -70,12 +70,12 @@ export function applyAction(state, action) {
   if (!handler) return { ok: false, error: `Unknown action: ${action?.type}` };
   if (state.phase === 'over') return { ok: false, error: 'The game is over' };
   if (!Number.isInteger(action.player) || !state.players[action.player]) return { ok: false, error: 'Unknown player' };
-  if (state.turn.freeRoads > 0 && action.type !== 'buildRoad') return { ok: false, error: 'Place your free roads first' };
+  if (state.mode !== 'rush' && state.turn.freeRoads > 0 && action.type !== 'buildRoad') return { ok: false, error: 'Place your free roads first' };
   const s = clone(state); // never change the caller's state
   const error = handler(s, action);
   if (error) return { ok: false, error };
   for (const m of MODULES) m.after?.(s);
-  scoring.after(s);
+  scoring.after(s, action);
   return { ok: true, state: s };
 }
 
@@ -88,6 +88,9 @@ export function legalActions(state, player = state.current) {
 export function waitingFor(state) {
   if (state.phase === 'over') return [];
   if (state.pending?.type === 'discard') return Object.keys(state.pending.counts).map(Number);
+  if (state.pending) return [state.pending.player ?? state.current];
+  // Rush: everyone can act at any time.
+  if (state.mode === 'rush' && state.phase === 'play') return state.players.map((p) => p.id);
   if (state.trade) {
     const silent = Object.entries(state.trade.responses).filter(([, r]) => r === null).map(([p]) => Number(p));
     return [state.trade.from, ...silent];

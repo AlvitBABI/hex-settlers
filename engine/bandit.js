@@ -3,17 +3,25 @@
 import { RESOURCES, DISCARD_LIMIT } from './constants.js';
 import { nextInt } from './rng.js';
 import { HEX_CORNERS } from './topology.js';
-import { handSize, isCardBundle, bundleSize, hasCards, log, nameOf } from './helpers.js';
+import { handSize, isCardBundle, bundleSize, hasCards, log, nameOf, isRush, banditMover } from './helpers.js';
 import { transfer } from './knowledge.js';
 
-// Called when a 7 is rolled.
+// Called when a 7 is rolled. In Classic the roller moves the bandit; in
+// Rush players take it in turns, in seat order (banditNext).
 export function startSeven(s) {
   const counts = {};
   for (const p of s.players) {
     const n = handSize(p.hand);
     if (n > DISCARD_LIMIT) counts[p.id] = Math.floor(n / 2);
   }
-  s.pending = Object.keys(counts).length ? { type: 'discard', counts } : { type: 'moveBandit' };
+  let mover = s.current;
+  if (isRush(s)) {
+    mover = s.banditNext ?? 0;
+    s.banditNext = (mover + 1) % s.players.length;
+  }
+  s.pending = Object.keys(counts).length
+    ? { type: 'discard', counts, player: mover }
+    : { type: 'moveBandit', player: mover };
 }
 
 // Players with cards next to `hex`, other than `player`.
@@ -34,23 +42,23 @@ function discard(s, { player, cards }) {
   transfer(s, player, 'bank', cards);
   delete s.pending.counts[player];
   log(s, `${nameOf(s, player)} discarded ${need} cards`);
-  if (Object.keys(s.pending.counts).length === 0) s.pending = { type: 'moveBandit' };
+  if (Object.keys(s.pending.counts).length === 0) s.pending = { type: 'moveBandit', player: banditMover(s) };
 }
 
 function moveBandit(s, { player, hex }) {
   if (s.pending?.type !== 'moveBandit') return 'The bandit is not moving now';
-  if (player !== s.current) return 'Not your turn';
+  if (player !== banditMover(s)) return 'It is not your bandit move';
   if (!(hex in HEX_CORNERS)) return 'No such hex';
   if (hex === s.bandit) return 'The bandit must move to a different hex';
   s.bandit = hex;
   log(s, `${nameOf(s, player)} moved the bandit`);
   const victims = victimsAt(s, hex, player);
-  s.pending = victims.length ? { type: 'steal', victims } : null;
+  s.pending = victims.length ? { type: 'steal', victims, player } : null;
 }
 
 function steal(s, { player, victim }) {
   if (s.pending?.type !== 'steal') return 'Nothing to steal now';
-  if (player !== s.current) return 'Not your turn';
+  if (player !== banditMover(s)) return 'It is not your steal';
   if (!s.pending.victims.includes(victim)) return 'You cannot steal from that player';
   const hand = s.players[victim].hand;
   const cards = RESOURCES.flatMap((r) => Array(hand[r]).fill(r));
@@ -71,7 +79,7 @@ export function legal(state, p) {
     // Too many combinations to list: this is a template saying how many.
     return pending.counts[p] ? [{ type: 'discard', player: p, count: pending.counts[p] }] : [];
   }
-  if (p !== state.current) return [];
+  if (p !== banditMover(state)) return [];
   if (pending.type === 'moveBandit') {
     return Object.keys(HEX_CORNERS).filter((h) => h !== state.bandit)
       .map((hex) => ({ type: 'moveBandit', player: p, hex }));

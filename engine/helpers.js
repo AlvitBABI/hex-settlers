@@ -39,9 +39,40 @@ export function log(state, text) {
 
 export const nameOf = (state, p) => state.players[p].name;
 
-// Why the current player can't do a normal turn action right now (or null).
+// ---- Classic vs Rush ----
+// Classic: players take turns. Rush: no turns, everyone acts at once and
+// the dice roll on a clock (the screen sends the roll).
+export const isRush = (state) => state.mode === 'rush';
+
+// Must this player roll before building/trading? (Never in Rush.)
+export const needsRoll = (state) => !isRush(state) && !state.turn.rolled;
+
+// Free roads from a Road Crew card still to place.
+export const freeRoadsOf = (state, p) =>
+  isRush(state) ? (state.players[p].freeRoads ?? 0) : (p === state.current ? state.turn.freeRoads : 0);
+export function setFreeRoads(state, p, n) {
+  if (isRush(state)) state.players[p].freeRoads = n;
+  else state.turn.freeRoads = n;
+}
+
+// One bonus card per turn (Classic) or per dice roll for each player (Rush).
+export const cardPlayedBy = (state, p) => (isRush(state) ? !!state.turn.played?.[p] : state.turn.cardPlayed);
+export function markCardPlayed(state, p) {
+  if (isRush(state)) state.turn.played = { ...(state.turn.played ?? {}), [p]: true };
+  else state.turn.cardPlayed = true;
+}
+
+// Who moves the bandit / steals right now.
+export const banditMover = (state) => state.pending?.player ?? state.current;
+
+// Why a player can't do a normal action right now (or null).
 export function mainTurnError(state, player) {
   if (state.phase !== 'play') return 'The game is not in the main phase';
+  if (isRush(state)) {
+    if (state.pending) return 'Wait: the bandit is being dealt with';
+    if (state.trade?.from === player) return 'Close your open trade first';
+    return null;
+  }
   if (player !== state.current) return 'Not your turn';
   if (state.pending) return 'Finish the current step first';
   if (state.trade) return 'Close the open trade first';

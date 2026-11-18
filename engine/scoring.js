@@ -57,13 +57,18 @@ function updateLongestRoad(state) {
 }
 
 // Runs after every successful action.
-export function after(state) {
+export function after(state, action) {
   if (state.phase !== 'play') return;
   updateLongestRoad(state);
-  // You can only win on your own turn.
-  if (points(state, state.current) >= WIN_POINTS) {
+  // Classic: you can only win on your own turn. Rush: whoever gets there
+  // first (the player who just acted is checked first).
+  const order = state.mode === 'rush'
+    ? [action?.player, ...state.players.map((p) => p.id)].filter((p) => Number.isInteger(p))
+    : [state.current];
+  const winner = order.find((p) => points(state, p) >= WIN_POINTS);
+  if (winner !== undefined) {
     state.phase = 'over';
-    state.winner = state.current;
-    log(state, `${nameOf(state, state.current)} wins!`);
+    state.winner = winner;
+    log(state, `${nameOf(state, winner)} wins!`);
   }
 }

@@ -19,7 +19,7 @@ test('7 with small hands: straight to moving the bandit', () => {
   const s = rolledSeven();
   give(s, 1, { wood: 7 });
   startSeven(s);
-  assert.deepEqual(s.pending, { type: 'moveBandit' });
+  assert.deepEqual(s.pending, { type: 'moveBandit', player: 0 });
 });
 
 test('7: more than 7 cards means discarding half (rounded down)', () => {
@@ -27,7 +27,7 @@ test('7: more than 7 cards means discarding half (rounded down)', () => {
   give(s, 1, { wood: 5, ore: 4 }); // 9 cards -> discard 4
   give(s, 2, { sheep: 8 });         // 8 cards -> discard 4
   startSeven(s);
-  assert.deepEqual(s.pending, { type: 'discard', counts: { 1: 4, 2: 4 } });
+  assert.deepEqual(s.pending, { type: 'discard', counts: { 1: 4, 2: 4 }, player: 0 });
   assert.deepEqual(waitingFor(s).sort(), [1, 2]);
   assert.deepEqual(legalActions(s, 1), [{ type: 'discard', player: 1, count: 4 }]);
   assert.equal(applyAction(s, { type: 'discard', player: 1, cards: { wood: 3 } }).ok, false, 'too few');
@@ -36,7 +36,7 @@ test('7: more than 7 cards means discarding half (rounded down)', () => {
   s = act(s, { type: 'discard', player: 1, cards: { wood: 2, ore: 2 } });
   assert.equal(handSize(s.players[1].hand), 5);
   s = act(s, { type: 'discard', player: 2, cards: { sheep: 4 } });
-  assert.deepEqual(s.pending, { type: 'moveBandit' });
+  assert.deepEqual(s.pending, { type: 'moveBandit', player: 0 });
 });
 
 test('bandit must move to a new hex, then steal one card from a neighbour', () => {
