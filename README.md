@@ -8,7 +8,9 @@ An offline hex-board strategy game for iPhone, built as an installable web app (
 - Setup: each player places a house and a road, then again in reverse order. Your second house gives you its resources.
 - On your turn: roll, then build (costs are the coloured dots on each button), trade, or play a bonus card. First to 10 points wins.
 - A 7 moves the bandit: anyone with more than 7 cards discards half, and the roller steals a card.
-- Pinch to zoom, drag to move, ⤢ to fit the board. ☰ leaves the game; it is saved and can be continued.
+- Trade: tap a card in your hand to start a trade, add what you want, then press Bank (if it matches your 4:1 / 3:1 / 2:1 rates) or Offer to players. Bots may accept, decline or counter-offer.
+- Your timer pauses while your offer waits for answers. ↶ Undo takes back a build or bank trade.
+- Pinch to zoom, drag to move, ⤢ to fit the board, 🔊 for sound. ☰ leaves the game; it is saved and can be continued.
 
 ## Run locally
 Open the folder in VS Code and use the Live Server extension on `index.html`.

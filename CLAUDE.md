@@ -18,7 +18,7 @@ An offline-first hex-board strategy game (resource trading and building, in the 
 - `ui/` renders state (SVG for the board) and sends actions to the engine. It contains no game rules.
 - `bots/` pick one action from `legalActions(state)` (or a free-form discard/trade offer the engine then checks). Bots never bypass the engine. `timeoutAction` is what the turn timer does for a human whose time runs out.
 - Engine modules: `game.js` (front door: createGame, applyAction, legalActions, waitingFor), `turn.js` (setup, dice, building), `bandit.js`, `trade.js`, `cards.js`, `scoring.js`, `topology.js`, `board.js`.
-- UI modules: `main.js` (start), `menu.js`, `game-screen.js` (screen state, bots loop, timer), `board-view.js` + `pieces-view.js` (SVG), `pan-zoom.js`, `art.js`, `storage.js` (save/continue).
+- UI modules: `main.js` (start), `menu.js`, `game-screen.js` (screen state, bots loop, timer, animations, undo), `sound.js`, `board-view.js` + `pieces-view.js` (SVG), `pan-zoom.js`, `art.js`, `storage.js` (save/continue).
 - Pass-and-play and bot games use the exact same engine.
 
 ## Offline / PWA
@@ -44,4 +44,5 @@ An offline-first hex-board strategy game (resource trading and building, in the 
 5. Bonus cards, Longest Route, Strongest Army, win at 10 points (DONE)
 6. Pass-and-play: "pass the phone" cover hides cards between players (DONE)
 7. Bots: goal-based heuristic with colonist-style trading; menu with up to 4 seats; turn timer (DONE)
-8. Polish: undo, sounds, smarter bots, trade counter-offers, animations (save/continue is done)
+8. Polish: undo, sounds, smarter bots, trade counter-offers, animations, save/continue (DONE)
+9. Ideas next: bots that only remember cards they have seen, human counter-offers, game statistics, settings for bot speed
