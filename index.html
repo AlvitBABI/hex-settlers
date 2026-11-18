@@ -14,13 +14,31 @@
   <link rel="stylesheet" href="ui/styles.css">
 </head>
 <body>
-  <header>
-    <h1>Hex Settlers</h1>
-    <span id="seed"></span>
-    <button id="fit" type="button">Fit</button>
-    <button id="new-board" type="button">New board</button>
-  </header>
-  <svg id="board" xmlns="http://www.w3.org/2000/svg" aria-label="Game board"></svg>
+  <section id="menu" class="screen"></section>
+
+  <section id="game" class="screen" hidden>
+    <header class="topbar">
+      <button class="icon-btn" data-act="menu" aria-label="Menu">☰</button>
+      <div id="players"></div>
+    </header>
+    <div id="status">
+      <div class="status-text"><div id="msg"></div><div id="log"></div></div>
+      <div id="dice"></div>
+      <div id="timer"></div>
+    </div>
+    <div class="board-wrap">
+      <svg id="board" xmlns="http://www.w3.org/2000/svg" aria-label="Game board"></svg>
+      <button class="icon-btn fit" data-act="fit" aria-label="Fit board">⤢</button>
+    </div>
+    <footer class="dock">
+      <div id="hand"></div>
+      <div id="actions"></div>
+    </footer>
+    <div id="sheet" class="sheet"></div>
+    <div id="cover" class="cover"></div>
+    <div id="toast"></div>
+  </section>
+
   <script type="module" src="ui/main.js"></script>
 </body>
 </html>

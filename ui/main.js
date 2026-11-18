@@ -1,30 +1,33 @@
-// Wires the screen to the engine. No game rules in here.
-import { createRng } from '../engine/rng.js';
-import { generateBoard } from '../engine/board.js';
-import { renderBoard } from './board-view.js';
-import { enablePanZoom } from './pan-zoom.js';
+// App start: show the menu, start or continue a game.
+import { createGame } from '../engine/game.js';
+import { showMenu } from './menu.js';
+import { startGame } from './game-screen.js';
+import { loadGame } from './storage.js';
 
-const svg = document.getElementById('board');
-const seedLabel = document.getElementById('seed');
-let panZoom = null;
+const menu = document.getElementById('menu');
+const game = document.getElementById('game');
 
-// A short random code, e.g. "k3f9qz". The board for a code is always the same.
-const randomSeed = () => Math.random().toString(36).slice(2, 8);
-
-function show(seed) {
-  const { board } = generateBoard(createRng(seed));
-  const bounds = renderBoard(svg, board);
-  seedLabel.textContent = `Board ${seed}`;
-  // Put the seed in the address so a board can be reopened (relative URL).
-  history.replaceState(null, '', `?seed=${encodeURIComponent(seed)}`);
-  if (panZoom) panZoom.setBounds(bounds);
-  else panZoom = enablePanZoom(svg, bounds);
+function openMenu() {
+  game.hidden = true;
+  menu.hidden = false;
+  const saved = loadGame();
+  showMenu({
+    saved: saved && saved.state?.phase !== 'over' ? saved : null,
+    onStart(config) {
+      const state = createGame({ seed: config.seed, players: config.players });
+      openGame(config, state);
+    },
+    onContinue() { openGame(saved.config, saved.state); },
+  });
 }
 
-document.getElementById('new-board').addEventListener('click', () => show(randomSeed()));
-document.getElementById('fit').addEventListener('click', () => panZoom.fit());
+function openGame(config, state) {
+  menu.hidden = true;
+  game.hidden = false;
+  startGame({ config, state, onExit: openMenu });
+}
 
-show(new URLSearchParams(location.search).get('seed') || randomSeed());
+openMenu();
 
 // Offline cache. Skipped on the local test server so edits show up at once.
 if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
