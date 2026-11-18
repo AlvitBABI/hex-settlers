@@ -1,18 +1,22 @@
-// Pinch-zoom and drag for an SVG, by changing its viewBox.
+// Pinch-zoom, drag and tap for an SVG, by changing its viewBox.
 // We track: the SVG point at the middle of the screen (cx, cy) and
 // `scale` = SVG units per screen pixel. Smaller scale = more zoomed in.
+// A short touch that barely moves counts as a tap: onTap(element).
 
-export function enablePanZoom(svg, bounds) {
+const TAP_SLOP = 10; // pixels a finger may wobble and still count as a tap
+
+export function enablePanZoom(svg, bounds, { onTap = () => {} } = {}) {
   const view = { cx: 0, cy: 0, scale: 1 };
   const pointers = new Map(); // pointerId -> {x, y} in screen pixels
   let fitScale = 1;
+  let tap = null; // { id, x, y } while a possible tap is in progress
 
   const rect = () => svg.getBoundingClientRect();
+  const clampScale = (s) => Math.min(fitScale, Math.max(fitScale / 5, s));
 
   function apply() {
     const { width, height } = rect();
-    // Never zoom out past "whole board fits", never in past 5x.
-    view.scale = Math.min(fitScale, Math.max(fitScale / 5, view.scale));
+    view.scale = clampScale(view.scale);
     // Keep the middle of the screen over the board.
     view.cx = Math.min(bounds.x + bounds.width, Math.max(bounds.x, view.cx));
     view.cy = Math.min(bounds.y + bounds.height, Math.max(bounds.y, view.cy));
@@ -32,8 +36,7 @@ export function enablePanZoom(svg, bounds) {
   // Zoom by `factor` keeping SVG point `anchor` under screen point `screen`.
   function zoomAt(anchor, screen, factor) {
     const { width, height } = rect();
-    view.scale *= factor;
-    view.scale = Math.min(fitScale, Math.max(fitScale / 5, view.scale));
+    view.scale = clampScale(view.scale * factor);
     view.cx = anchor.x - (screen.x - width / 2) * view.scale;
     view.cy = anchor.y - (screen.y - height / 2) * view.scale;
     apply();
@@ -60,12 +63,14 @@ export function enablePanZoom(svg, bounds) {
 
   svg.addEventListener('pointerdown', (e) => {
     pointers.set(e.pointerId, local(e));
+    tap = pointers.size === 1 ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
     // Keep receiving this finger's moves even if it slides off the board.
     try { svg.setPointerCapture(e.pointerId); } catch { /* not critical */ }
   });
 
   svg.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) return;
+    if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > TAP_SLOP) tap = null;
     const before = pointers.size === 2 ? twoFinger() : null;
     const old = pointers.get(e.pointerId);
     const now = local(e);
@@ -81,7 +86,15 @@ export function enablePanZoom(svg, bounds) {
     }
   });
 
-  const lift = (e) => pointers.delete(e.pointerId);
+  const lift = (e) => {
+    const wasTap = tap && tap.id === e.pointerId && e.type === 'pointerup';
+    pointers.delete(e.pointerId);
+    if (wasTap) {
+      tap = null;
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      if (target) onTap(target);
+    }
+  };
   svg.addEventListener('pointerup', lift);
   svg.addEventListener('pointercancel', lift);
 
@@ -103,5 +116,6 @@ export function enablePanZoom(svg, bounds) {
   return {
     fit,
     setBounds(b) { bounds = b; fit(); },
+    setOnTap(fn) { onTap = fn; },
   };
 }

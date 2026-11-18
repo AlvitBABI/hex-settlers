@@ -93,3 +93,6 @@ export function defsMarkup() {
     </filter>
     ${icons}`;
 }
+
+// One colour per seat.
+export const PLAYER_COLOURS = ['#e5484d', '#3e8ef7', '#f5a524', '#9b5de5'];

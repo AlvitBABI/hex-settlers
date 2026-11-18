@@ -59,7 +59,7 @@ export function renderBoard(svg, board) {
     const g = el('g', { class: 'port' });
     for (const c of p.corners) {
       const cp = pointFromId(c);
-      g.append(el('line', { x1: px, y1: py, x2: cp.x, y2: cp.y, class: 'dock' }));
+      g.append(el('line', { x1: px, y1: py, x2: cp.x, y2: cp.y, class: 'pier' }));
     }
     g.append(el('circle', { cx: px, cy: py, r: 17, fill: RESOURCE_COLOUR[p.type], class: 'port-badge', filter: 'url(#f-shadow)' }));
     g.append(el('use', { href: `#i-${p.type}`, x: px - 10, y: py - 15, width: 20, height: 15 }));
